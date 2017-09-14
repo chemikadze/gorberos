@@ -1,0 +1,54 @@
+package datamodel
+
+import (
+	"testing"
+)
+
+func assertEquals(t *testing.T, a interface{}, b interface{}) {
+	if a != b {
+		t.Errorf("%v != %v", a, b)
+	}
+}
+
+func assertEqualsInt(t *testing.T, a int32, b int32) {
+	if a != b {
+		t.Errorf("%v != %v", a, b)
+	}
+}
+
+func TestPrincipalName(t *testing.T) {
+	simplePrincipalName := PrincipalName{0, []string{"admin"}}
+	assertEquals(t, simplePrincipalName.String(), "admin")
+	twoElemName := PrincipalName{0, []string{"admin", "local"}}
+	assertEquals(t, twoElemName.String(), "admin/local")
+}
+
+func TestKerberosTime(t *testing.T) {
+	instance := KerberosTime{1234567890}
+	assertEquals(t, instance.String(), "1234567890Z")
+	parsed := KerberosTimeFromString("1234567890Z")
+	assertEquals(t, parsed.Timestamp, instance.Timestamp)
+}
+
+func TestAdData(t *testing.T) {
+	var x = Realm("EXAMPLE.COM")
+	var data AuthorizationData = []AuthorizationDataElement{
+		AdKdcIssued{
+			AdChecksum:         Checksum{42, []byte{0, 1, 2, 3, 4, 5}},
+			IssuingRealm:       &x,
+			IssuingServiceName: &PrincipalName{NT_SRV_INST, []string{"admin", "local"}},
+			Elements: []AuthorizationDataElement{
+				AdIfRelevant{},
+				AdAndOr{},
+				AdMandatoryForKdc{},
+			},
+		},
+	}
+	assertEqualsInt(t, data.Get(0).AdType(), AD_KDC_ISSUED)
+	assertEquals(t, data.Get(0).(AdKdcIssued).IssuingRealm.String(), "EXAMPLE.COM")
+	assertEquals(t, data.Get(0).(AdKdcIssued).IssuingServiceName.String(), "admin/local")
+	assertEquals(t, len(data.Get(0).(AdKdcIssued).Elements.Unwrap()), 3)
+	assertEqualsInt(t, (data.Get(0).(AdKdcIssued).Elements)[0].AdType(), AD_IF_RELEVANT)
+	assertEqualsInt(t, (data.Get(0).(AdKdcIssued).Elements)[1].AdType(), AD_AND_OR)
+	assertEqualsInt(t, (data.Get(0).(AdKdcIssued).Elements)[2].AdType(), AD_MANDAROTY_FOR_KDC)
+}
