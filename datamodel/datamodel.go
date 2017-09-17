@@ -19,6 +19,10 @@ type PrincipalName struct {
 	NameString []string
 }
 
+func JoinPrinc(princ PrincipalName, r Realm) string {
+	return fmt.Sprintf("%s@%s", princ.String(), r.String())
+}
+
 const (
 	NT_UNKNOWN        = 0  // Name type not known
 	NT_PRINCIPAL      = 1  // Just the name of the principal as in DCE, or for users
@@ -40,7 +44,7 @@ func (p *PrincipalName) String() string {
 }
 
 type KerberosTime struct {
-	Timestamp uint32
+	Timestamp int64
 }
 
 func (t KerberosTime) String() string {
@@ -424,7 +428,7 @@ type DecodedTicketFlags struct {
 type KdcReq struct {
 	PvNo    int32
 	MsgType int64
-	PaData  []PaData
+	PaData  []PaData // preauth data
 	ReqBody KdcReqBody
 }
 
@@ -451,18 +455,47 @@ type KdcReq struct {
   }
 */
 type KdcReqBody struct {
-	KdcOptions           KdcOptions
-	CName                PrincipalName
-	Realm                Realm
-	SName                PrincipalName
-	From                 *KerberosTime
-	Till                 KerberosTime
-	RTime                *KerberosTime
-	NoOnce               uint32
-	EType                []int32
-	Addresses            HostAddresses
+	KdcOptions KdcOptions
+
+	// client's principal
+	CName PrincipalName
+
+	// in the AS exchange, this is also the realm part of the client's principal identifier
+	Realm Realm
+
+	// server identity, may only be absent when the ENC-TKT-IN-SKEY option is specified
+	SName *PrincipalName
+
+	// included in the KRB_AS_REQ and KRB_TGS_REQ ticket requests when the requested ticket is to be postdated
+	// specifies the desired starttime for the requested ticket
+	From *KerberosTime
+
+	// expiration date requested by the client
+	// if the requested endtime is "19700101000000Z", the requested ticket
+	// is to have the maximum endtime permitted according to KDC policy
+	Till KerberosTime
+
+	// requested renew-till time
+	RTime  *KerberosTime
+	NoOnce uint32
+
+	// desired encryption algorithm
+	EType []int32
+
+	// required for initial request for tickets
+	// usually copied by the KDC into the caddr field of the resulting ticket
+	Addresses HostAddresses
+
+	// can only be present in the TGS_REQ form
 	EncAuthorizationData *EncryptedData
-	AdditionalTickets    []Ticket
+
+	// If the ENC-TKT-IN-SKEY option has been specified, then the session key from the additional ticket will be
+	// used in place of the server's key to encrypt the new ticket.  When
+	// the ENC-TKT-IN-SKEY option is used for user-to-user
+	// authentication, this additional ticket MAY be a TGT issued by the
+	// local realm or an inter-realm TGT issued for the current KDC's
+	// realm by a remote KDC
+	AdditionalTickets []Ticket
 }
 
 /**
@@ -495,34 +528,31 @@ type KdcOptions struct {
 	Data KerberosFlags
 }
 
-// TODO
-func (KdcOptions) Decode() DecodedKdcOptions {
-	return DecodedKdcOptions{}
-}
-
-type DecodedKdcOptions struct {
-}
+const (
+	KDC_FLAG_FORWARDABLE    = 1
+	KDC_FLAG_FORWARDED      = 2
+	KDC_FLAG_PROXIABLE      = 3
+	KDC_FLAG_PROXY          = 4
+	KDC_FLAG_ALLOW_POSTDATE = 5
+	KDC_FLAG_POSTDATED      = 6
+	KDC_FLAG_RENEWABLE      = 8
+	KDC_FLAG_RENEWABLE_OK   = 27
+)
 
 /**
   AS-REQ          ::= [APPLICATION 10] KDC-REQ
 */
-type AsReq struct {
-	KdcReq
-}
+type AsReq KdcReq
 
 /**
   AS-REP          ::= [APPLICATION 11] KDC-REP
 */
-type AsRep struct {
-	KdcRep
-}
+type AsRep KdcRep
 
 /**
   TGS-REQ         ::= [APPLICATION 12] KDC-REQ
 */
-type TgsReq struct {
-	KdcReq
-}
+type TgsReq KdcReq
 
 func (TgsReq) PaType() int32 {
 	return PA_TGS_REQ
@@ -531,9 +561,7 @@ func (TgsReq) PaType() int32 {
 /**
   TGS-REP         ::= [APPLICATION 13] KDC-REP
 */
-type TgsRep struct {
-	KdcRep
-}
+type TgsRep KdcRep
 
 /**
   KDC-REP         ::= SEQUENCE {
@@ -562,16 +590,12 @@ type KdcRep struct {
 /**
   EncASRepPart    ::= [APPLICATION 25] EncKDCRepPart
 */
-type EncAsRepPart struct {
-	EncKDCRepPart
-}
+type EncAsRepPart EncKDCRepPart
 
 /**
   EncTGSRepPart   ::= [APPLICATION 26] EncKDCRepPart
 */
-type EncTGSRepPart struct {
-	EncKDCRepPart
-}
+type EncTGSRepPart EncKDCRepPart
 
 /**
    EncKDCRepPart   ::= SEQUENCE {
@@ -610,10 +634,13 @@ type EncKDCRepPart struct {
           lr-value        [1] KerberosTime
   }
 */
-type LastReq struct {
+type LastReq []LastReqElement
+
+type LastReqElement struct {
 	LrType  int32
 	LrValue KerberosTime
 }
+
 
 /**
   AP-REQ          ::= [APPLICATION 14] SEQUENCE {
@@ -860,7 +887,11 @@ type KrbError struct {
 	Realm     Realm
 	SName     PrincipalName
 	EText     string
-	EData     []byte
+	EData     []byte // if KDC_ERR_PREAUTH_REQUIRED, will contain an encoding of a sequence of padata fields
+}
+
+func (e KrbError) Error() string {
+	return fmt.Sprintf("KRB-ERROR %s: %s", e.ErrorCode, e.EText)
 }
 
 /**
@@ -877,3 +908,121 @@ type TypedDataElement struct {
 	DataType  int32
 	DataValue *[]byte
 }
+
+/**
+  Error Code                         Value  Meaning
+
+  KDC_ERR_NONE                           0  No error
+  KDC_ERR_NAME_EXP                       1  Client's entry in database
+                                              has expired
+  KDC_ERR_SERVICE_EXP                    2  Server's entry in database
+                                              has expired
+  KDC_ERR_BAD_PVNO                       3  Requested protocol version
+                                              number not supported
+  KDC_ERR_C_OLD_MAST_KVNO                4  Client's key encrypted in
+                                              old master key
+  KDC_ERR_S_OLD_MAST_KVNO                5  Server's key encrypted in
+                                              old master key
+  KDC_ERR_C_PRINCIPAL_UNKNOWN            6  Client not found in
+                                              Kerberos database
+  KDC_ERR_S_PRINCIPAL_UNKNOWN            7  Server not found in
+                                              Kerberos database
+  KDC_ERR_PRINCIPAL_NOT_UNIQUE           8  Multiple principal entries
+                                              in database
+  KDC_ERR_NULL_KEY                       9  The client or server has a
+                                              null key
+  KDC_ERR_CANNOT_POSTDATE               10  Ticket not eligible for
+                                              postdating
+  KDC_ERR_NEVER_VALID                   11  Requested starttime is
+                                              later than end time
+  KDC_ERR_POLICY                        12  KDC policy rejects request
+  KDC_ERR_BADOPTION                     13  KDC cannot accommodate
+                                              requested option
+  KDC_ERR_ETYPE_NOSUPP                  14  KDC has no support for
+                                              encryption type
+  KDC_ERR_SUMTYPE_NOSUPP                15  KDC has no support for
+                                              checksum type
+  KDC_ERR_PADATA_TYPE_NOSUPP            16  KDC has no support for
+                                              padata type
+  KDC_ERR_TRTYPE_NOSUPP                 17  KDC has no support for
+                                              transited type
+  KDC_ERR_CLIENT_REVOKED                18  Clients credentials have
+                                              been revoked
+  KDC_ERR_SERVICE_REVOKED               19  Credentials for server have
+                                              been revoked
+  KDC_ERR_TGT_REVOKED                   20  TGT has been revoked
+  KDC_ERR_CLIENT_NOTYET                 21  Client not yet valid; try
+                                              again later
+  KDC_ERR_SERVICE_NOTYET                22  Server not yet valid; try
+                                              again later
+  KDC_ERR_KEY_EXPIRED                   23  Password has expired;
+                                              change password to reset
+  KDC_ERR_PREAUTH_FAILED                24  Pre-authentication
+                                              information was invalid
+  KDC_ERR_PREAUTH_REQUIRED              25  Additional pre-
+                                              authentication required
+  KDC_ERR_SERVER_NOMATCH                26  Requested server and ticket
+                                              don't match
+  KDC_ERR_MUST_USE_USER2USER            27  Server principal valid for
+                                              user2user only
+  KDC_ERR_PATH_NOT_ACCEPTED             28  KDC Policy rejects
+                                              transited path
+  KDC_ERR_SVC_UNAVAILABLE               29  A service is not available
+  KRB_AP_ERR_BAD_INTEGRITY              31  Integrity check on
+                                              decrypted field failed
+  KRB_AP_ERR_TKT_EXPIRED                32  Ticket expired
+  KRB_AP_ERR_TKT_NYV                    33  Ticket not yet valid
+  KRB_AP_ERR_REPEAT                     34  Request is a replay
+  KRB_AP_ERR_NOT_US                     35  The ticket isn't for us
+  KRB_AP_ERR_BADMATCH                   36  Ticket and authenticator
+                                              don't match
+  KRB_AP_ERR_SKEW                       37  Clock skew too great
+  KRB_AP_ERR_BADADDR                    38  Incorrect net address
+  KRB_AP_ERR_BADVERSION                 39  Protocol version mismatch
+  KRB_AP_ERR_MSG_TYPE                   40  Invalid msg type
+  KRB_AP_ERR_MODIFIED                   41  Message stream modified
+  KRB_AP_ERR_BADORDER                   42  Message out of order
+  KRB_AP_ERR_BADKEYVER                  44  Specified version of key is
+                                              not available
+  KRB_AP_ERR_NOKEY                      45  Service key not available
+  KRB_AP_ERR_MUT_FAIL                   46  Mutual authentication
+                                              failed
+  KRB_AP_ERR_BADDIRECTION               47  Incorrect message direction
+  KRB_AP_ERR_METHOD                     48  Alternative authentication
+                                              method required
+  KRB_AP_ERR_BADSEQ                     49  Incorrect sequence number
+                                              in message
+  KRB_AP_ERR_INAPP_CKSUM                50  Inappropriate type of
+                                              checksum in message
+  KRB_AP_PATH_NOT_ACCEPTED              51  Policy rejects transited
+                                              path
+  KRB_ERR_RESPONSE_TOO_BIG              52  Response too big for UDP;
+                                              retry with TCP
+  KRB_ERR_GENERIC                       60  Generic error (description
+                                              in e-text)
+  KRB_ERR_FIELD_TOOLONG                 61  Field is too long for this
+                                              implementation
+  KDC_ERROR_CLIENT_NOT_TRUSTED          62  Reserved for PKINIT
+  KDC_ERROR_KDC_NOT_TRUSTED             63  Reserved for PKINIT
+  KDC_ERROR_INVALID_SIG                 64  Reserved for PKINIT
+  KDC_ERR_KEY_TOO_WEAK                  65  Reserved for PKINIT
+  KDC_ERR_CERTIFICATE_MISMATCH          66  Reserved for PKINIT
+  KRB_AP_ERR_NO_TGT                     67  No TGT available to
+                                              validate USER-TO-USER
+  KDC_ERR_WRONG_REALM                   68  Reserved for future use
+  KRB_AP_ERR_USER_TO_USER_REQUIRED      69  Ticket must be for
+                                              USER-TO-USER
+  KDC_ERR_CANT_VERIFY_CERTIFICATE       70  Reserved for PKINIT
+  KDC_ERR_INVALID_CERTIFICATE           71  Reserved for PKINIT
+  KDC_ERR_REVOKED_CERTIFICATE           72  Reserved for PKINIT
+  KDC_ERR_REVOCATION_STATUS_UNKNOWN     73  Reserved for PKINIT
+  KDC_ERR_REVOCATION_STATUS_UNAVAILABLE 74  Reserved for PKINIT
+  KDC_ERR_CLIENT_NAME_MISMATCH          75  Reserved for PKINIT
+  KDC_ERR_KDC_NAME_MISMATCH             76  Reserved for PKINIT
+*/
+const (
+	KDC_ERR_C_PRINCIPAL_UNKNOWN = 6
+	KDC_ERR_ETYPE_NOSUPP        = 14
+	KDC_ERR_CANNOT_POSTDATE     = 10
+	KDC_ERR_NEVER_VALID         = 11
+)
