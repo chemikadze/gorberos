@@ -298,6 +298,14 @@ func (ETypeInfo2) PaType() int32 {
 */
 type KerberosFlags []bool
 
+func NewKerberosFlags() KerberosFlags {
+	return NewKerberosFlagsN(32)
+}
+
+func NewKerberosFlagsN(n int32) KerberosFlags {
+	return make(KerberosFlags, n)
+}
+
 /**
   EncryptedData   ::= SEQUENCE {
           etype   [0] Int32 -- EncryptionType --,
@@ -407,18 +415,29 @@ type TransitedEncoding struct {
           -- transited-policy-checked(12),
           -- ok-as-delegate(13)
 */
-type TicketFlags struct {
-	Data KerberosFlags
+type TicketFlags KerberosFlags
+
+func NewTicketFlags() TicketFlags {
+	return TicketFlags(NewKerberosFlags())
 }
 
-// TODO
-func (TicketFlags) Decode() DecodedTicketFlags {
-	return DecodedTicketFlags{}
-}
+const (
+	//it is OK to issue a new TGT with a different network address based on the presented ticket
+	TKT_FLAG_FORWARDABLE = 1
 
-type DecodedTicketFlags struct {
-	// TBD
-}
+	// same as FORWARDABLE except it tells the ticket-granting server that
+	// only non-TGTs may be issued with different network addresses
+	TKT_FLAG_PROXIABLE = 3
+
+	// tells TGS that postdated ticket MAY be issued based on this TGT
+	TKT_FLAG_MAY_POSTDATE = 5
+
+	// tells if it is postdated
+	TKT_FLAG_POSTDATED = 6
+
+	// used by TGS, to obtain replacement ticket that expires at later date
+	TKT_FLAG_RENEWABLE = 8
+)
 
 /**
   The KRB_KDC_REQ message has no application tag number of its own.
@@ -549,7 +568,7 @@ const (
 	KDC_FLAG_POSTDATED      = 6
 	KDC_FLAG_RENEWABLE      = 8
 	KDC_FLAG_RENEWABLE_OK   = 27
-	KDC_ENC_TICKET_IN_SKEY = 28
+	KDC_ENC_TICKET_IN_SKEY  = 28
 )
 
 /**

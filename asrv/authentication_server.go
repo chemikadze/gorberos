@@ -55,15 +55,22 @@ func (a *authenticationServer) AuthenticationServerExchange(req datamodel.AsReq)
 	if ok, err := a.checkMinLifetime(req, startTime, expirationTime); !ok {
 		return false, err, noRep()
 	}
-	renewable := req.ReqBody.KdcOptions.Data[datamodel.KDC_FLAG_RENEWABLE_OK]
+	kdcFlags := req.ReqBody.KdcOptions.Data
+	renewable := kdcFlags[datamodel.KDC_FLAG_RENEWABLE_OK]
 	var renewTill *datamodel.KerberosTime
 	if renewable {
 		renew := a.calcNextRenewTill(clientPrinc, serverPrinc, req.ReqBody.RTime)
 		renewTill = &renew
 	}
+	flags := datamodel.NewTicketFlags()
+	flags[datamodel.TKT_FLAG_FORWARDABLE] = kdcFlags[datamodel.KDC_FLAG_FORWARDABLE]
+	flags[datamodel.TKT_FLAG_MAY_POSTDATE] = kdcFlags[datamodel.KDC_FLAG_ALLOW_POSTDATE]
+	flags[datamodel.TKT_FLAG_POSTDATED] = kdcFlags[datamodel.KDC_FLAG_POSTDATED]
+	flags[datamodel.TKT_FLAG_PROXIABLE] = kdcFlags[datamodel.KDC_FLAG_PROXIABLE]
+	flags[datamodel.TKT_FLAG_RENEWABLE] = kdcFlags[datamodel.KDC_FLAG_RENEWABLE]
 	encTicket := datamodel.EncTicketPart{
-		//Flags             TicketFlags // TODO set FORWARDABLE, MAY-POSTDATE, POSTDATED, PROXIABLE, RENEWABLE
-		//Key TODO???
+		Flags:  flags,
+		Key:    sessionKey,
 		CRealm: req.ReqBody.Realm,
 		CName:  req.ReqBody.CName,
 		//Transited         TransitedEncoding
@@ -84,14 +91,14 @@ func (a *authenticationServer) AuthenticationServerExchange(req datamodel.AsReq)
 		LastReq:       make(datamodel.LastReq, 0), // TODO
 		Nonce:         req.ReqBody.NoOnce,
 		KeyExpiration: nil, // TODO secret key expiration
-		//Flags         TicketFlags TODO
-		AuthTime:  datamodel.KerberosTime{time.Now().Unix()},
-		StartTime: &startTime,
-		EndTime:   expirationTime,
-		RenewTill: renewTill,
-		SRealm:    a.realm,
-		SName:     sname,
-		CAddr:     req.ReqBody.Addresses,
+		Flags:         flags,
+		AuthTime:      datamodel.KerberosTime{time.Now().Unix()},
+		StartTime:     &startTime,
+		EndTime:       expirationTime,
+		RenewTill:     renewTill,
+		SRealm:        a.realm,
+		SName:         sname,
+		CAddr:         req.ReqBody.Addresses,
 	}
 	rep = datamodel.AsRep{
 		PaData:  make([]datamodel.PaData, 0), // TODO
@@ -194,7 +201,7 @@ func (a *authenticationServer) getStarttime(req datamodel.AsReq) (bool, datamode
 }
 
 func (a *authenticationServer) getExpirationTime(startTime datamodel.KerberosTime, princ database.PrincipalInfo,
-requestedTill datamodel.KerberosTime) datamodel.KerberosTime {
+	requestedTill datamodel.KerberosTime) datamodel.KerberosTime {
 	// TODO enforce local and principal policy
 	return requestedTill
 }
@@ -223,7 +230,7 @@ func newEmptyError(req datamodel.AsReq) datamodel.KrbError {
 }
 
 func (a *authenticationServer) checkMinLifetime(req datamodel.AsReq, startTime datamodel.KerberosTime, expirationTime datamodel.KerberosTime) (bool, datamodel.KrbError) {
-	if expirationTime.Timestamp - startTime.Timestamp < a.minTicketLifetime {
+	if expirationTime.Timestamp-startTime.Timestamp < a.minTicketLifetime {
 		err := newEmptyError(req)
 		err.ErrorCode = datamodel.KDC_ERR_NEVER_VALID
 		return false, err
