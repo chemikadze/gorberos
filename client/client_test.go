@@ -34,7 +34,7 @@ func newMockAlgo() mockAlgo {
 }
 
 func (a mockAlgo) EType() int32 {
-	return 0;
+	return 0
 }
 
 func (a mockAlgo) GenerateKey() []byte {
@@ -71,7 +71,7 @@ func TestHappyPath(t *testing.T) {
 			&encFactory,
 			func(t *mockTransport, req datamodel.AsReq) (error, datamodel.AsRep) {
 				encData := datamodel.EncryptedData{}
-				encAsRepPart := datamodel.EncAsRepPart{NoNCE: req.ReqBody.NoOnce}
+				encAsRepPart := datamodel.EncAsRepPart{Nonce: req.ReqBody.NoOnce}
 				t.f.algo.result = encAsRepPart
 				return nil, datamodel.AsRep{EncPart: encData}
 			},
@@ -91,7 +91,7 @@ func TestReplayAttack(t *testing.T) {
 			&encFactory,
 			func(t *mockTransport, req datamodel.AsReq) (error, datamodel.AsRep) {
 				encData := datamodel.EncryptedData{}
-				encAsRepPart := datamodel.EncAsRepPart{NoNCE: 42}
+				encAsRepPart := datamodel.EncAsRepPart{Nonce: 42}
 				t.f.algo.result = encAsRepPart
 				return nil, datamodel.AsRep{EncPart: encData}
 			},

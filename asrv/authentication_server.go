@@ -73,10 +73,10 @@ func (a *authenticationServer) AuthenticationServerExchange(req datamodel.AsReq)
 		EncPart: a.encryptTicketPart(serverPrinc.SecretKeys, encTicket),
 	}
 	encAsRep := datamodel.EncAsRepPart{
-		Key: sessionKey,
-		LastReq: make(datamodel.LastReq, 0), //TODO
-		NoNCE:         req.ReqBody.NoOnce,
-		KeyExpiration: &expirationTime,
+		Key:           sessionKey,
+		LastReq:       make(datamodel.LastReq, 0), // TODO
+		Nonce:         req.ReqBody.NoOnce,
+		KeyExpiration: nil, // TODO secret key expiration
 		//Flags         TicketFlags TODO
 		AuthTime:  datamodel.KerberosTime{time.Now().Unix()},
 		StartTime: &startTime,

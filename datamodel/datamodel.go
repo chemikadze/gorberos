@@ -19,6 +19,18 @@ type PrincipalName struct {
 	NameString []string
 }
 
+func (n PrincipalName) Equal(other PrincipalName) bool {
+	if n.NameType != other.NameType || len(n.NameString) != len(other.NameString) {
+		return false
+	}
+	for i, elem := range n.NameString {
+		if other.NameString[i] != elem {
+			return false
+		}
+	}
+	return true
+}
+
 func JoinPrinc(princ PrincipalName, r Realm) string {
 	return fmt.Sprintf("%s@%s", princ.String(), r.String())
 }
@@ -616,8 +628,8 @@ type EncTGSRepPart EncKDCRepPart
 type EncKDCRepPart struct {
 	Key           EncryptionKey
 	LastReq       LastReq
-	NoNCE         uint32
-	KeyExpiration *KerberosTime
+	Nonce         uint32
+	KeyExpiration *KerberosTime // *secret* key expiration
 	Flags         TicketFlags
 	AuthTime      KerberosTime
 	StartTime     *KerberosTime
@@ -640,7 +652,6 @@ type LastReqElement struct {
 	LrType  int32
 	LrValue KerberosTime
 }
-
 
 /**
   AP-REQ          ::= [APPLICATION 14] SEQUENCE {

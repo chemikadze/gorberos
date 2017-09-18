@@ -31,7 +31,7 @@ func TestKerberosTime(t *testing.T) {
 }
 
 func TestAdData(t *testing.T) {
-	var x = Realm("EXAMPLE.COM")
+	x := Realm("EXAMPLE.COM")
 	var data AuthorizationData = []AuthorizationDataElement{
 		AdKdcIssued{
 			AdChecksum:         Checksum{42, []byte{0, 1, 2, 3, 4, 5}},
@@ -51,4 +51,28 @@ func TestAdData(t *testing.T) {
 	assertEqualsInt(t, (data.Get(0).(AdKdcIssued).Elements)[0].AdType(), AD_IF_RELEVANT)
 	assertEqualsInt(t, (data.Get(0).(AdKdcIssued).Elements)[1].AdType(), AD_AND_OR)
 	assertEqualsInt(t, (data.Get(0).(AdKdcIssued).Elements)[2].AdType(), AD_MANDAROTY_FOR_KDC)
+}
+
+func TestPrincipalEquality(t *testing.T) {
+	x := PrincipalName{NT_UNKNOWN, []string{"admin", "local"}}
+	y := PrincipalName{NT_UNKNOWN, []string{"admin", "local"}}
+	if !x.Equal(y) {
+		t.Errorf("%v should equal %v", x, y)
+	}
+	z := PrincipalName{NT_UNKNOWN, []string{"admin"}}
+	if x.Equal(z) {
+		t.Errorf("%v should not equal %v", x, z)
+	}
+}
+
+func TestRealmEquality(t *testing.T) {
+	x := Realm("EXAMPLE.COM")
+	y := Realm("EXAMPLE.COM")
+	if x != y {
+		t.Errorf("%v should equal %v", x, y)
+	}
+	z := Realm("TEST.COM")
+	if x == z {
+		t.Errorf("%v should not equal %v", x, z)
+	}
 }
