@@ -22,13 +22,20 @@ type authenticationServer struct {
 }
 
 func (a *authenticationServer) AuthenticationServerExchange(req datamodel.AsReq) (ok bool, err datamodel.KrbError, rep datamodel.AsRep) {
+	if req.ReqBody.SName == nil {
+		err := newEmptyError(req)
+		err.ErrorCode = 42
+		err.EText = "sname missing in request body"
+		return false, err, noRep()
+	}
+	sname := *req.ReqBody.SName
 	clientPrinc, ok := a.database.GetPrincipal(req.ReqBody.CName)
 	if !ok {
 		return false, princNotFoundError(req, req.ReqBody.CName), noRep()
 	}
-	serverPrinc, ok := a.database.GetPrincipal(*(req.ReqBody.SName)) // TODO when it is null?
+	serverPrinc, ok := a.database.GetPrincipal(sname)
 	if !ok {
-		return false, princNotFoundError(req, *(req.ReqBody.SName)), noRep()
+		return false, princNotFoundError(req, sname), noRep()
 	}
 	if ok, err := a.preauthCheck(req); !ok {
 		return false, err, noRep()
@@ -69,7 +76,7 @@ func (a *authenticationServer) AuthenticationServerExchange(req datamodel.AsReq)
 	}
 	ticket := datamodel.Ticket{
 		Realm:   a.realm,
-		SName:   *(req.ReqBody.SName), // TODO AS or what?
+		SName:   sname,
 		EncPart: a.encryptTicketPart(serverPrinc.SecretKeys, encTicket),
 	}
 	encAsRep := datamodel.EncAsRepPart{
@@ -83,7 +90,7 @@ func (a *authenticationServer) AuthenticationServerExchange(req datamodel.AsReq)
 		EndTime:   expirationTime,
 		RenewTill: renewTill,
 		SRealm:    a.realm,
-		SName:     *(req.ReqBody.SName),
+		SName:     sname,
 		CAddr:     req.ReqBody.Addresses,
 	}
 	rep = datamodel.AsRep{
@@ -103,7 +110,7 @@ func princNotFoundError(req datamodel.AsReq, name datamodel.PrincipalName) datam
 		CUSec:     int32(ctime.Nanosecond() / 1000),
 		ErrorCode: datamodel.KDC_ERR_C_PRINCIPAL_UNKNOWN,
 		CRealm:    req.ReqBody.Realm,
-		SName:     *(req.ReqBody.SName),
+		SName:     *req.ReqBody.SName,
 		EText:     fmt.Sprintf("Principal %s not found", datamodel.JoinPrinc(name, req.ReqBody.Realm)),
 		EData:     make([]byte, 0),
 	}
@@ -157,7 +164,7 @@ func algorithmNotFoundError(req datamodel.AsReq) datamodel.KrbError {
 		CUSec:     int32(now.Nanosecond() / 1000),
 		ErrorCode: datamodel.KDC_ERR_ETYPE_NOSUPP,
 		CRealm:    req.ReqBody.Realm,
-		SName:     *(req.ReqBody.SName),
+		SName:     *req.ReqBody.SName,
 		EText:     "Neither of requested encryption types is supported",
 	}
 }
@@ -187,7 +194,7 @@ func (a *authenticationServer) getStarttime(req datamodel.AsReq) (bool, datamode
 }
 
 func (a *authenticationServer) getExpirationTime(startTime datamodel.KerberosTime, princ database.PrincipalInfo,
-	requestedTill datamodel.KerberosTime) datamodel.KerberosTime {
+requestedTill datamodel.KerberosTime) datamodel.KerberosTime {
 	// TODO enforce local and principal policy
 	return requestedTill
 }
@@ -209,14 +216,14 @@ func newEmptyError(req datamodel.AsReq) datamodel.KrbError {
 		CUSec: usec,
 		//ErrorCode: ,
 		CRealm: req.ReqBody.Realm,
-		SName:  *(req.ReqBody.SName),
+		SName:  *req.ReqBody.SName,
 		//EText:     ,
 		//EData:     make([]byte, 0),
 	}
 }
 
 func (a *authenticationServer) checkMinLifetime(req datamodel.AsReq, startTime datamodel.KerberosTime, expirationTime datamodel.KerberosTime) (bool, datamodel.KrbError) {
-	if expirationTime.Timestamp-startTime.Timestamp < a.minTicketLifetime {
+	if expirationTime.Timestamp - startTime.Timestamp < a.minTicketLifetime {
 		err := newEmptyError(req)
 		err.ErrorCode = datamodel.KDC_ERR_NEVER_VALID
 		return false, err
