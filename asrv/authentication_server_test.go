@@ -39,3 +39,16 @@ func TestKeyExpiration(t *testing.T) {
 		t.Error("keyExpiration should take smallest from two expirations")
 	}
 }
+
+func TestExpirationTime(t *testing.T) {
+	start := datamodel.KerberosTime{1000}
+	if getExpirationTime(100, 50, start, datamodel.KerberosTime{1001}).Timestamp != 1001 {
+		t.Error("smallest requestTill should win")
+	}
+	if getExpirationTime(100, 50, start, datamodel.KerberosTime{2000}).Timestamp != 1050 {
+		t.Error("smallest policy should win")
+	}
+	if getExpirationTime(20, 50, start, datamodel.KerberosTime{2000}).Timestamp != 1020 {
+		t.Error("smallest policy should win")
+	}
+}

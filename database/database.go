@@ -11,7 +11,9 @@ type KdcDatabase interface {
 }
 
 type PrincipalInfo struct {
-	SecretKeys   []datamodel.EncryptionKey
-	MaxRenewTime int64
-	LastReq      datamodel.LastReq
+	SecretKeys []datamodel.EncryptionKey
+	LastReq    datamodel.LastReq
+
+	MaxRenewTime      int64
+	MaxExpirationTime int64
 }

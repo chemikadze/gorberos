@@ -20,6 +20,8 @@ type authenticationServer struct {
 	minTicketLifetime int64
 	maxRenewTime      int64
 	realm             datamodel.Realm
+	maxPostdate       int64
+	maxExpirationTime int64
 }
 
 func (a *authenticationServer) AuthenticationServerExchange(req datamodel.AsReq) (ok bool, err datamodel.KrbError, rep datamodel.AsRep) {
@@ -56,11 +58,12 @@ func (a *authenticationServer) AuthenticationServerExchange(req datamodel.AsReq)
 	sessionAlgo := a.selectSessionKeyAlgo(req.ReqBody.EType)
 	sessionKey := a.generateSessionKey(sessionAlgo)
 	// TODO support POSTDATE
-	ok, err, startTime := a.getStarttime(req)
-	if !ok {
+	err, startTime, invalid := a.getStarttime(req)
+	if err.ErrorCode != datamodel.KDC_ERR_NONE {
 		return false, err, noRep()
 	}
-	expirationTime := a.getExpirationTime(startTime, clientPrinc, req.ReqBody.Till)
+	expirationTime := getExpirationTime(
+		a.maxExpirationTime, clientPrinc.MaxExpirationTime, startTime, req.ReqBody.Till)
 	if ok, err := a.checkMinLifetime(req, startTime, expirationTime); !ok {
 		return false, err, noRep()
 	}
@@ -84,6 +87,7 @@ func (a *authenticationServer) AuthenticationServerExchange(req datamodel.AsReq)
 	flags[datamodel.TKT_FLAG_POSTDATED] = kdcFlags[datamodel.KDC_FLAG_POSTDATED]
 	flags[datamodel.TKT_FLAG_PROXIABLE] = kdcFlags[datamodel.KDC_FLAG_PROXIABLE]
 	flags[datamodel.TKT_FLAG_RENEWABLE] = kdcFlags[datamodel.KDC_FLAG_RENEWABLE]
+	flags[datamodel.TKT_FLAG_INVALID] = invalid
 
 	// fill ticket info
 	encTicket := datamodel.EncTicketPart{
@@ -194,34 +198,44 @@ func algorithmNotFoundError(req datamodel.AsReq) datamodel.KrbError {
 	}
 }
 
-func (a *authenticationServer) getStarttime(req datamodel.AsReq) (bool, datamodel.KrbError, datamodel.KerberosTime) {
-	if req.ReqBody.RTime == nil {
-		return true, noError(), datamodel.KerberosTime{time.Now().Unix()}
+func (a *authenticationServer) getStarttime(req datamodel.AsReq) (err datamodel.KrbError, t datamodel.KerberosTime, invalid bool) {
+	now, _ := kerberosNow()
+	if req.ReqBody.From == nil {
+		return noError(), now, false
 	}
-	difference := req.ReqBody.RTime.Timestamp - time.Now().Unix() // -past, +future
+	difference := req.ReqBody.From.Timestamp - time.Now().Unix() // -past, +future
 	if difference < 0 {
-		return true, noError(), datamodel.KerberosTime{time.Now().Unix()}
+		return noError(), now, false
 	}
 	postdated := req.ReqBody.KdcOptions.Data[datamodel.KDC_FLAG_POSTDATED]
 	if postdated && difference < a.clockSkew {
-		return true, noError(), datamodel.KerberosTime{time.Now().Unix()}
+		return noError(), now, false
 	}
 	if !postdated && difference > a.clockSkew {
 		err := newEmptyError(req)
 		err.ErrorCode = datamodel.KDC_ERR_CANNOT_POSTDATE
-		return false, err, datamodel.KerberosTime{}
+		return err, datamodel.KerberosTime{}, false
+	}
+	// check against policy
+	if postdated && difference > a.maxPostdate {
+		err := newEmptyError(req)
+		err.ErrorCode = datamodel.KDC_ERR_CANNOT_POSTDATE
+		return err, datamodel.KerberosTime{}, false
 	}
 	// postdated ticket beyond clock skew clock skew or non-postdated within clock skew
-	// TODO checked against the policy of the local realm
-	// TODO set INVALID flag on ticket
-	return true, noError(), *(req.ReqBody.RTime) // todo when rtime is not nil?
+	return noError(), *req.ReqBody.From, true
 
 }
 
-func (a *authenticationServer) getExpirationTime(startTime datamodel.KerberosTime, princ database.PrincipalInfo,
+func getExpirationTime(
+	realmExpirationTime int64,
+	princExpirationTime int64,
+	startTime datamodel.KerberosTime,
 	requestedTill datamodel.KerberosTime) datamodel.KerberosTime {
-	// TODO enforce local and principal policy
-	return requestedTill
+
+	maxExpiration := min64(princExpirationTime, realmExpirationTime)
+	enforced := min64(requestedTill.Timestamp, startTime.Timestamp+maxExpiration)
+	return datamodel.KerberosTime{Timestamp: enforced}
 }
 
 // TODO

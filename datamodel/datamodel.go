@@ -435,6 +435,8 @@ const (
 	// tells if it is postdated
 	TKT_FLAG_POSTDATED = 6
 
+	TKT_FLAG_INVALID = 7
+
 	// used by TGS, to obtain replacement ticket that expires at later date
 	TKT_FLAG_RENEWABLE = 8
 )
@@ -1077,6 +1079,7 @@ type TypedDataElement struct {
   KDC_ERR_KDC_NAME_MISMATCH             76  Reserved for PKINIT
 */
 const (
+	KDC_ERR_NONE                = 0
 	KDC_ERR_C_PRINCIPAL_UNKNOWN = 6
 	KDC_ERR_ETYPE_NOSUPP        = 14
 	KDC_ERR_CANNOT_POSTDATE     = 10
