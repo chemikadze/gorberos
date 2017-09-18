@@ -674,6 +674,31 @@ type LastReqElement struct {
 }
 
 /**
+If the lr-type field is zero (0), then no information is conveyed
+     by the lr-value subfield.  If the absolute value of the lr-type
+     field is one (1), then the lr-value subfield is the time of last
+     initial request for a TGT.  If it is two (2), then the lr-value
+     subfield is the time of last initial request.  If it is three (3),
+     then the lr-value subfield is the time of issue for the newest TGT
+     used.  If it is four (4), then the lr-value subfield is the time
+     of the last renewal.  If it is five (5), then the lr-value
+     subfield is the time of last request (of any type).  If it is (6),
+     then the lr-value subfield is the time when the password will
+     expire.  If it is (7), then the lr-value subfield is the time when
+     the account will expire.
+*/
+const (
+	LR_TYPE_NO                  = 0
+	LR_TYPE_TGT_INITIAL_REQUEST = 1
+	LR_TYPE_INITIAL_REQUEST     = 2
+	LR_TYPE_TGT                 = 3
+	LR_TYPE_RENEWAL             = 4
+	LR_TYPE_ANY                 = 5
+	LR_TYPE_PASSWORD_EXPIRES    = 6
+	LR_TYPE_ACCOUNT_EXPIRES     = 7
+)
+
+/**
   AP-REQ          ::= [APPLICATION 14] SEQUENCE {
           pvno            [0] INTEGER (5),
           msg-type        [1] INTEGER (14),

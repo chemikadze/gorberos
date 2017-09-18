@@ -5,6 +5,7 @@ import (
 	"github.com/chemikadze/gorberos/crypto"
 	"github.com/chemikadze/gorberos/database"
 	"github.com/chemikadze/gorberos/datamodel"
+	"math"
 	"time"
 )
 
@@ -22,6 +23,7 @@ type authenticationServer struct {
 }
 
 func (a *authenticationServer) AuthenticationServerExchange(req datamodel.AsReq) (ok bool, err datamodel.KrbError, rep datamodel.AsRep) {
+	// initial integrity verification
 	if req.ReqBody.SName == nil {
 		err := newEmptyError(req)
 		err.ErrorCode = 42
@@ -29,17 +31,24 @@ func (a *authenticationServer) AuthenticationServerExchange(req datamodel.AsReq)
 		return false, err, noRep()
 	}
 	sname := *req.ReqBody.SName
-	clientPrinc, ok := a.database.GetPrincipal(req.ReqBody.CName)
+
+	cname := req.ReqBody.CName
+	// get principal info from database
+	clientPrinc, ok := a.database.GetPrincipal(cname)
 	if !ok {
-		return false, princNotFoundError(req, req.ReqBody.CName), noRep()
+		return false, princNotFoundError(req, cname), noRep()
 	}
 	serverPrinc, ok := a.database.GetPrincipal(sname)
 	if !ok {
 		return false, princNotFoundError(req, sname), noRep()
 	}
+
+	// run preauth checks
 	if ok, err := a.preauthCheck(req); !ok {
 		return false, err, noRep()
 	}
+
+	// find best encryption algorithm and keys
 	if !a.checkEtypes(req.ReqBody.EType) {
 		return false, algorithmNotFoundError(req), noRep()
 	}
@@ -62,19 +71,28 @@ func (a *authenticationServer) AuthenticationServerExchange(req datamodel.AsReq)
 		renew := a.calcNextRenewTill(clientPrinc, serverPrinc, req.ReqBody.RTime)
 		renewTill = &renew
 	}
+
+	// update lr info
+	authTime, _ := kerberosNow()
+	a.database.UpdateLastReq(cname, datamodel.LR_TYPE_ANY, authTime)
+	a.database.UpdateLastReq(cname, datamodel.LR_TYPE_INITIAL_REQUEST, authTime)
+
+	// set ticket flags
 	flags := datamodel.NewTicketFlags()
 	flags[datamodel.TKT_FLAG_FORWARDABLE] = kdcFlags[datamodel.KDC_FLAG_FORWARDABLE]
 	flags[datamodel.TKT_FLAG_MAY_POSTDATE] = kdcFlags[datamodel.KDC_FLAG_ALLOW_POSTDATE]
 	flags[datamodel.TKT_FLAG_POSTDATED] = kdcFlags[datamodel.KDC_FLAG_POSTDATED]
 	flags[datamodel.TKT_FLAG_PROXIABLE] = kdcFlags[datamodel.KDC_FLAG_PROXIABLE]
 	flags[datamodel.TKT_FLAG_RENEWABLE] = kdcFlags[datamodel.KDC_FLAG_RENEWABLE]
+
+	// fill ticket info
 	encTicket := datamodel.EncTicketPart{
 		Flags:  flags,
 		Key:    sessionKey,
 		CRealm: req.ReqBody.Realm,
-		CName:  req.ReqBody.CName,
+		CName:  cname,
 		//Transited         TransitedEncoding
-		AuthTime:  datamodel.KerberosTime{time.Now().Unix()},
+		AuthTime:  authTime,
 		StartTime: &startTime,
 		EndTime:   expirationTime,
 		RenewTill: renewTill,
@@ -88,11 +106,11 @@ func (a *authenticationServer) AuthenticationServerExchange(req datamodel.AsReq)
 	}
 	encAsRep := datamodel.EncAsRepPart{
 		Key:           sessionKey,
-		LastReq:       make(datamodel.LastReq, 0), // TODO
+		LastReq:       clientPrinc.LastReq,
 		Nonce:         req.ReqBody.NoOnce,
-		KeyExpiration: nil, // TODO secret key expiration
+		KeyExpiration: keyExpirationFromLastReq(clientPrinc.LastReq),
 		Flags:         flags,
-		AuthTime:      datamodel.KerberosTime{time.Now().Unix()},
+		AuthTime:      authTime,
 		StartTime:     &startTime,
 		EndTime:       expirationTime,
 		RenewTill:     renewTill,
@@ -103,7 +121,7 @@ func (a *authenticationServer) AuthenticationServerExchange(req datamodel.AsReq)
 	rep = datamodel.AsRep{
 		PaData:  make([]datamodel.PaData, 0), // TODO
 		CRealm:  req.ReqBody.Realm,
-		CName:   req.ReqBody.CName,
+		CName:   cname,
 		Ticket:  ticket,
 		EncPart: a.encryptAsRepPart(clientKey, encAsRep),
 	}
@@ -286,4 +304,20 @@ func noRep() datamodel.AsRep {
 func kerberosNow() (t datamodel.KerberosTime, usec int32) {
 	now := time.Now()
 	return datamodel.KerberosTime{now.Unix()}, int32(now.Nanosecond() / 1000)
+}
+
+func keyExpirationFromLastReq(lastReq datamodel.LastReq) *datamodel.KerberosTime {
+	minElem := datamodel.KerberosTime{math.MaxInt64}
+	for _, elem := range lastReq {
+		if elem.LrType == datamodel.LR_TYPE_PASSWORD_EXPIRES || elem.LrType == datamodel.LR_TYPE_ACCOUNT_EXPIRES {
+			if elem.LrValue.Timestamp < minElem.Timestamp {
+				minElem.Timestamp = elem.LrValue.Timestamp
+			}
+		}
+	}
+	if minElem.Timestamp == math.MaxInt64 {
+		return nil
+	} else {
+		return &minElem
+	}
 }
