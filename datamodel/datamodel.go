@@ -1154,3 +1154,7 @@ func NewErrorC(realm Realm, sname PrincipalName, code int32) KrbError {
 func NewErrorGeneric(realm Realm, sname PrincipalName, msg string) KrbError {
 	return NewErrorExt(realm, sname, KRB_ERR_GENERIC, msg)
 }
+
+func NoError() KrbError {
+	return KrbError{}
+}

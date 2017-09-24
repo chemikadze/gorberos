@@ -125,6 +125,7 @@ func (c client) AuthenticateApplication() error {
 	if encApRep.SeqNumber != nil {
 		c.seqNum = *encApRep.SeqNumber
 	}
+	//  implementations ... MAY provide routines to choose subkeys based on session keys
 	if encApRep.SubKey != nil {
 		c.subKey = *encApRep.SubKey
 	}
