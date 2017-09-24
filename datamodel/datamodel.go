@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"time"
 )
 
 type Realm string
@@ -67,6 +68,11 @@ func KerberosTimeFromString(str string) KerberosTime {
 	var result KerberosTime
 	fmt.Sscanf(str, "%dZ", &result.Timestamp)
 	return result
+}
+
+func KerberosTimeNow() (t KerberosTime, usec int32) {
+	now := time.Now()
+	return KerberosTime{now.Unix()}, int32(now.Nanosecond() / 1000)
 }
 
 /**
@@ -303,6 +309,9 @@ func NewKerberosFlags() KerberosFlags {
 }
 
 func NewKerberosFlagsN(n int32) KerberosFlags {
+	if n < 32 {
+		panic("Min KerberosFlags size is 32 bit")
+	}
 	return make(KerberosFlags, n)
 }
 
@@ -710,9 +719,13 @@ const (
   }
 */
 type ApReq struct {
-	PvNo          int32
-	MsgType       int32
-	ApOptions     ApOptions
+	PvNo      int32
+	MsgType   int32
+	ApOptions ApOptions
+	Ticket    Ticket
+
+	// certifies to a server that the sender has recent knowledge of
+	// the encryption key in the accompanying ticket
 	Authenticator EncryptedData
 }
 
@@ -722,16 +735,17 @@ type ApReq struct {
           -- use-session-key(1),
           -- mutual-required(2)
 */
-type ApOptions struct {
-	Data KerberosFlags
+type ApOptions KerberosFlags
+
+func NewApOptions() ApOptions {
+	return ApOptions(NewKerberosFlags())
 }
 
-func (ApOptions) Decode() DecodedApOptions {
-	return DecodedApOptions{}
-}
-
-type DecodedApOptions struct {
-}
+const (
+	AP_FLAG_RESERVED        = 0
+	AP_FLAG_USE_SESSION_KEY = 1
+	AP_FLAG_MUTUAL_REQUIRED = 2
+)
 
 /**
 -- Unencrypted authenticator
@@ -752,7 +766,7 @@ type Authenticator struct {
 	CRealm            Realm
 	CName             PrincipalName
 	CKSum             *Checksum
-	CUSec             uint32
+	CUSec             int32
 	CTime             KerberosTime
 	SubKey            *EncryptionKey
 	SeqNumber         *uint32

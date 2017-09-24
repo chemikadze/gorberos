@@ -15,7 +15,7 @@ type AuthenticationServer interface {
 
 type authenticationServer struct {
 	database          database.KdcDatabase
-	crypto            crypto.Factory
+	crypto            crypto.EncryptionFactory
 	clockSkew         int64
 	minTicketLifetime int64
 	maxRenewTime      int64
@@ -177,7 +177,7 @@ func (a *authenticationServer) selectSessionKeyAlgo(algo []int32) crypto.Algorit
 	panic("not found supported algorithm")
 }
 
-func isSupportedEtype(factory crypto.Factory, requested int32) bool {
+func isSupportedEtype(factory crypto.EncryptionFactory, requested int32) bool {
 	for _, supported := range factory.SupportedETypes() {
 		if supported == requested {
 			return true
@@ -316,8 +316,7 @@ func noRep() datamodel.AsRep {
 }
 
 func kerberosNow() (t datamodel.KerberosTime, usec int32) {
-	now := time.Now()
-	return datamodel.KerberosTime{now.Unix()}, int32(now.Nanosecond() / 1000)
+	return datamodel.KerberosTimeNow()
 }
 
 func keyExpirationFromLastReq(lastReq datamodel.LastReq) *datamodel.KerberosTime {

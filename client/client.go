@@ -12,27 +12,32 @@ import (
 	"time"
 )
 
-type Client struct {
-	transport    gorberos.ClientTransport
-	tgt          datamodel.Ticket
-	cname        datamodel.PrincipalName
-	sname        datamodel.PrincipalName
-	realm        datamodel.Realm
-	encFactory   crypto.Factory
-	keyLifetime  *uint32
-	key          datamodel.EncryptionKey
-	sessionKey   datamodel.EncryptionKey
-	keyStartTime *datamodel.KerberosTime
-	keyEndTime   datamodel.KerberosTime
+type client struct {
+	transport       gorberos.ClientTransport
+	tgt             datamodel.Ticket
+	cname           datamodel.PrincipalName
+	sname           datamodel.PrincipalName
+	realm           datamodel.Realm
+	encFactory      crypto.EncryptionFactory
+	cksumFactory    crypto.ChecksumFactory
+	keyLifetime     *uint32
+	key             datamodel.EncryptionKey
+	sessionKey      datamodel.EncryptionKey
+	keyStartTime    *datamodel.KerberosTime
+	keyEndTime      datamodel.KerberosTime
+	apUseSessionKey bool
+	apMutualAuth    bool
+	seqNum          uint32
+	subKey          datamodel.EncryptionKey
 }
 
 func New(transport gorberos.ClientTransport) gorberos.Client {
-	return Client{
+	return client{
 		transport: transport,
 	}
 }
 
-func (c Client) Authenticate() error {
+func (c client) Authenticate() error {
 	n, err := rand.Int(rand.Reader, big.NewInt(math.MaxInt32))
 	nonce := uint32(n.Uint64())
 	var till int64
@@ -63,7 +68,11 @@ func (c Client) Authenticate() error {
 	}
 	// The encrypted part of the KRB_AS_REP message also contains the nonce
 	// that MUST be matched with the nonce from the KRB_AS_REQ message.
-	err, encRep := c.decryptData(rep.EncPart)
+	encRep := datamodel.EncAsRepPart{}
+	err = c.decrypt(rep.EncPart, &encRep)
+	if err != nil {
+		return err
+	}
 	if encRep.Nonce != nonce {
 		return errors.New("Potential replay attack: nonce of KRB_AS_REP did not match nonce of KRB_AS_REQ")
 	}
@@ -85,9 +94,65 @@ func (c Client) Authenticate() error {
 	return nil
 }
 
-func (c Client) decryptData(data datamodel.EncryptedData) (error, datamodel.EncAsRepPart) {
+func (c client) AuthenticateApplication() error {
+	flags := datamodel.NewApOptions()
+	flags[datamodel.AP_FLAG_USE_SESSION_KEY] = c.apUseSessionKey
+	flags[datamodel.AP_FLAG_MUTUAL_REQUIRED] = c.apMutualAuth
+	auth := c.generateAuthenticator()
+	err, encAuth := c.encryptAuthenticator(c.sessionKey, auth)
+	if err != nil {
+		return err
+	}
+	req := datamodel.ApReq{
+		ApOptions:     flags,
+		Ticket:        c.tgt,
+		Authenticator: encAuth,
+	}
+	err, rep := c.transport.SendApReq(req)
+	if err != nil {
+		return err
+	}
+	encApRep := datamodel.EncAPRepPart{}
+	err = c.decrypt(rep.EncPart, &encApRep)
+	if err != nil {
+		return nil
+	}
+	if encApRep.CTime != auth.CTime || encApRep.CUSec != auth.CUSec {
+		return errors.New(fmt.Sprintf(
+			"Response CTime or CUSec did not match those of authenticator: %v != %v || %v != %v ",
+			encApRep.CTime, auth.CTime, encApRep.CUSec, auth.CUSec))
+	}
+	if encApRep.SeqNumber != nil {
+		c.seqNum = *encApRep.SeqNumber
+	}
+	if encApRep.SubKey != nil {
+		c.subKey = *encApRep.SubKey
+	}
+	return nil
+}
+
+func (c client) decrypt(data datamodel.EncryptedData, dest interface{}) error {
 	algorithm := c.encFactory.Create(data.EType)
-	result := &datamodel.EncAsRepPart{}
-	err := algorithm.Decrypt(data, c.key, result)
-	return err, *result
+	return algorithm.Decrypt(data, c.key, dest)
+}
+
+func (c client) generateAuthenticator() datamodel.Authenticator {
+	// TODO Client implementations SHOULD ensure that the timestamps are not reused
+	ctime, usec := datamodel.KerberosTimeNow()
+	return datamodel.Authenticator{
+		AuthenticatorVNo:  5,
+		CRealm:            c.realm,
+		CName:             c.cname,
+		CKSum:             nil, // TODO calculate checksum
+		CUSec:             usec,
+		CTime:             ctime,
+		SubKey:            nil, // session key from ticket will be used
+		SeqNumber:         nil, // TODO support of seq numbers to detect replays
+		AuthorizationData: nil, // additional restrictions ontop of specified in a ticket
+	}
+}
+
+func (c client) encryptAuthenticator(key datamodel.EncryptionKey, auth datamodel.Authenticator) (error, datamodel.EncryptedData) {
+	algorithm := c.encFactory.Create(key.KeyType)
+	return algorithm.Encrypt(key, auth)
 }
