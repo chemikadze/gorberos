@@ -50,6 +50,8 @@ const (
 	PVNO             = 5
 	TKT_NO           = 5
 	AUTHENTICATOR_NO = 5
+
+	MSG_TYPE_KRB_AP_REQ = 14
 )
 
 func (p *PrincipalName) String() string {
@@ -62,6 +64,19 @@ type KerberosTime struct {
 
 func (t KerberosTime) String() string {
 	return fmt.Sprintf("%vZ", t.Timestamp)
+}
+
+func (t KerberosTime) AbsoluteDifference(t2 KerberosTime) int64 {
+	diff := t.Timestamp - t2.Timestamp
+	if diff < 0 {
+		return -diff
+	} else {
+		return diff
+	}
+}
+
+func (t KerberosTime) Difference(t2 KerberosTime) int64 {
+	return t.Timestamp - t2.Timestamp
 }
 
 func KerberosTimeFromString(str string) KerberosTime {
@@ -1098,4 +1113,44 @@ const (
 	KDC_ERR_ETYPE_NOSUPP        = 14
 	KDC_ERR_CANNOT_POSTDATE     = 10
 	KDC_ERR_NEVER_VALID         = 11
+	KRB_AP_ERR_BAD_INTEGRITY    = 31
+	KRB_AP_ERR_TKT_EXPIRED      = 32
+	KRB_AP_ERR_TKT_NYV          = 33
+	KRB_AP_ERR_REPEAT           = 34
+	KRB_AP_ERR_BADMATCH         = 36
+	KRB_AP_ERR_SKEW             = 37
+	KRB_AP_ERR_MSG_TYPE         = 40
+	KRB_AP_ERR_BADKEYVER        = 44
+	KRB_AP_ERR_NOKEY            = 45
+	KRB_ERR_GENERIC             = 60
 )
+
+func NewEmptyError(realm Realm, sname PrincipalName) KrbError {
+	ctime, usec := KerberosTimeNow()
+	return KrbError{
+		CTime: ctime,
+		CUSec: usec,
+		//ErrorCode: ,
+		CRealm: realm,
+		SName:  sname,
+		//EText:     ,
+		//EData:     make([]byte, 0),
+	}
+}
+
+func NewErrorExt(realm Realm, sname PrincipalName, code int32, msg string) KrbError {
+	err := NewEmptyError(realm, sname)
+	err.ErrorCode = code
+	err.EText = msg
+	return err
+}
+
+func NewErrorC(realm Realm, sname PrincipalName, code int32) KrbError {
+	err := NewEmptyError(realm, sname)
+	err.ErrorCode = code
+	return err
+}
+
+func NewErrorGeneric(realm Realm, sname PrincipalName, msg string) KrbError {
+	return NewErrorExt(realm, sname, KRB_ERR_GENERIC, msg)
+}
