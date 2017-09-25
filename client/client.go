@@ -37,7 +37,7 @@ func New(transport gorberos.ClientTransport) gorberos.Client {
 	}
 }
 
-func (c client) Authenticate() error {
+func (c *client) Authenticate() error {
 	n, err := rand.Int(rand.Reader, big.NewInt(math.MaxInt32))
 	nonce := uint32(n.Uint64())
 	var till int64
@@ -94,7 +94,7 @@ func (c client) Authenticate() error {
 	return nil
 }
 
-func (c client) AuthenticateApplication() error {
+func (c *client) AuthenticateApplication() error {
 	flags := datamodel.NewApOptions()
 	flags[datamodel.AP_FLAG_USE_SESSION_KEY] = c.apUseSessionKey
 	flags[datamodel.AP_FLAG_MUTUAL_REQUIRED] = c.apMutualAuth
@@ -132,12 +132,12 @@ func (c client) AuthenticateApplication() error {
 	return nil
 }
 
-func (c client) decrypt(data datamodel.EncryptedData, dest interface{}) error {
+func (c *client) decrypt(data datamodel.EncryptedData, dest interface{}) error {
 	algorithm := c.encFactory.Create(data.EType)
 	return algorithm.Decrypt(data, c.key, dest)
 }
 
-func (c client) generateAuthenticator() datamodel.Authenticator {
+func (c *client) generateAuthenticator() datamodel.Authenticator {
 	// TODO Client implementations SHOULD ensure that the timestamps are not reused
 	ctime, usec := datamodel.KerberosTimeNow()
 	return datamodel.Authenticator{
@@ -153,7 +153,7 @@ func (c client) generateAuthenticator() datamodel.Authenticator {
 	}
 }
 
-func (c client) encryptAuthenticator(key datamodel.EncryptionKey, auth datamodel.Authenticator) (error, datamodel.EncryptedData) {
+func (c *client) encryptAuthenticator(key datamodel.EncryptionKey, auth datamodel.Authenticator) (error, datamodel.EncryptedData) {
 	algorithm := c.encFactory.Create(key.KeyType)
 	return algorithm.Encrypt(key, auth)
 }
