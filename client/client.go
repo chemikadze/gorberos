@@ -1,20 +1,18 @@
 package client
 
 import (
-	"crypto/rand"
 	"errors"
 	"fmt"
 	"github.com/chemikadze/gorberos"
 	"github.com/chemikadze/gorberos/crypto"
 	"github.com/chemikadze/gorberos/datamodel"
-	"math"
-	"math/big"
 	"time"
 )
 
 type client struct {
 	transport       gorberos.ClientTransport
 	tgt             datamodel.Ticket
+	encAsRep        datamodel.EncAsRepPart
 	cname           datamodel.PrincipalName
 	sname           datamodel.PrincipalName
 	realm           datamodel.Realm
@@ -22,9 +20,8 @@ type client struct {
 	cksumFactory    crypto.ChecksumFactory
 	keyLifetime     *uint32
 	key             datamodel.EncryptionKey
-	sessionKey      datamodel.EncryptionKey
-	keyStartTime    *datamodel.KerberosTime
-	keyEndTime      datamodel.KerberosTime
+	appTicket       datamodel.Ticket
+	appEncTicket    datamodel.EncTGSRepPart
 	apUseSessionKey bool
 	apMutualAuth    bool
 	seqNum          uint32
@@ -32,21 +29,22 @@ type client struct {
 }
 
 func New(transport gorberos.ClientTransport) gorberos.Client {
-	return client{
+	c := client{
 		transport: transport,
 	}
+	return &c
 }
 
 func (c *client) Authenticate() error {
-	n, err := rand.Int(rand.Reader, big.NewInt(math.MaxInt32))
-	nonce := uint32(n.Uint64())
+	nonce := crypto.GenerateNonce()
 	var till int64
 	if c.keyLifetime != nil {
 		till = time.Now().Unix() + int64(*c.keyLifetime)
 	}
+	flags := datamodel.NewKdcOptions()
 	req := datamodel.AsReq{
 		ReqBody: datamodel.KdcReqBody{
-			KdcOptions: datamodel.KdcOptions{}, // TODO
+			KdcOptions: flags,
 			CName:      c.cname,
 			Realm:      c.realm,
 			Till:       datamodel.KerberosTime{till},
@@ -58,38 +56,81 @@ func (c *client) Authenticate() error {
 	if err != nil {
 		return err
 	}
-	if !rep.CName.Equal(req.ReqBody.CName) {
-		return errors.New(fmt.Sprintf(
-			"Response cname %v does not match request cname %v", rep.CName, req.ReqBody.CName))
-	}
-	if rep.CRealm != req.ReqBody.Realm {
-		return errors.New(fmt.Sprintf(
-			"Response crealm %v does not match request realm %v", rep.CRealm, req.ReqBody.Realm))
-	}
-	// The encrypted part of the KRB_AS_REP message also contains the nonce
-	// that MUST be matched with the nonce from the KRB_AS_REQ message.
-	encRep := datamodel.EncAsRepPart{}
-	err = c.decrypt(rep.EncPart, &encRep)
+	err = c.validateKdcRep(datamodel.KdcReq(req), datamodel.KdcRep(rep))
 	if err != nil {
 		return err
 	}
-	if encRep.Nonce != nonce {
-		return errors.New("Potential replay attack: nonce of KRB_AS_REP did not match nonce of KRB_AS_REQ")
+
+	encRep := datamodel.EncAsRepPart{}
+	err = c.decrypt(c.key, rep.EncPart, &encRep)
+	if err != nil {
+		return err
 	}
-	// TODO padata
-	if req.ReqBody.SName != nil && !encRep.SName.Equal(*req.ReqBody.SName) {
-		return errors.New(fmt.Sprintf(
-			"Response sname %v does not match request cname %v", rep.CName, req.ReqBody.CName))
+	err = c.validateEncKdcRepPart(datamodel.KdcReq(req), datamodel.EncKDCRepPart(encRep))
+	if err != nil {
+		return err
 	}
-	if encRep.SRealm != req.ReqBody.Realm {
-		return errors.New(fmt.Sprintf(
-			"Response srealm %v does not match request realm %v", rep.CRealm, req.ReqBody.Realm))
-	}
+
 	// TODO authtime can be used to adjust subsequent messages
 	c.tgt = rep.Ticket
-	c.sessionKey = encRep.Key
-	c.keyStartTime = encRep.StartTime
-	c.keyEndTime = encRep.EndTime
+	c.encAsRep = encRep
+
+	return nil
+}
+
+/**
+
+  When:
+   1) obtain auth creedentials (using TGT ticket)
+   2) renew or validate ticket
+   3) obtain proxy ticket
+
+  The primary difference is that encryption and
+  decryption in the TGS exchange does not take place under the client's
+  key.  Instead, the session key from the TGT or renewable ticket, or
+  sub-session key from an Authenticator is used.
+*/
+func (c *client) AuthenticateTgs() error {
+	flags := datamodel.NewKdcOptions()
+	nonce := crypto.GenerateNonce()
+	var till int64
+	if c.keyLifetime != nil {
+		till = time.Now().Unix() + int64(*c.keyLifetime)
+	}
+	req := datamodel.TgsReq{
+		//PaData:  []PaData // TODO support preauth data
+		ReqBody: datamodel.KdcReqBody{
+			KdcOptions: flags,
+			CName:      c.cname,
+			Realm:      c.realm,
+			SName:      &c.sname, // TODO may be absent in ENC-TKT-IN-SKEY case
+			Till:       datamodel.KerberosTime{till},
+			NoOnce:     nonce,
+			EType:      c.encFactory.SupportedETypes(),
+		},
+	}
+
+	err, rep := c.transport.SendTgsReq(req)
+	if err != nil {
+		return err
+	}
+	err = c.validateKdcRep(datamodel.KdcReq(req), datamodel.KdcRep(rep))
+	if err != nil {
+		return err
+	}
+
+	encRep := datamodel.EncTGSRepPart{}
+	err = c.decrypt(c.encAsRep.Key, rep.EncPart, &encRep)
+	if err != nil {
+		return err
+	}
+	err = c.validateEncKdcRepPart(datamodel.KdcReq(req), datamodel.EncKDCRepPart(encRep))
+	if err != nil {
+		return err
+	}
+
+	c.appTicket = rep.Ticket
+	c.appEncTicket = encRep
 
 	return nil
 }
@@ -98,8 +139,10 @@ func (c *client) AuthenticateApplication() error {
 	flags := datamodel.NewApOptions()
 	flags[datamodel.AP_FLAG_USE_SESSION_KEY] = c.apUseSessionKey
 	flags[datamodel.AP_FLAG_MUTUAL_REQUIRED] = c.apMutualAuth
+	var key datamodel.EncryptionKey
+	key = c.appEncTicket.Key
 	auth := c.generateAuthenticator()
-	err, encAuth := c.encryptAuthenticator(c.sessionKey, auth)
+	err, encAuth := c.encryptAuthenticator(c.encAsRep.Key, auth)
 	if err != nil {
 		return err
 	}
@@ -113,7 +156,7 @@ func (c *client) AuthenticateApplication() error {
 		return err
 	}
 	encApRep := datamodel.EncAPRepPart{}
-	err = c.decrypt(rep.EncPart, &encApRep)
+	err = c.decrypt(key, rep.EncPart, &encApRep)
 	if err != nil {
 		return nil
 	}
@@ -132,9 +175,37 @@ func (c *client) AuthenticateApplication() error {
 	return nil
 }
 
-func (c *client) decrypt(data datamodel.EncryptedData, dest interface{}) error {
+func (c *client) validateKdcRep(req datamodel.KdcReq, rep datamodel.KdcRep) error {
+	if !rep.CName.Equal(req.ReqBody.CName) {
+		return errors.New(fmt.Sprintf(
+			"Response cname %v does not match request cname %v", rep.CName, req.ReqBody.CName))
+	}
+	if rep.CRealm != req.ReqBody.Realm {
+		return errors.New(fmt.Sprintf(
+			"Response crealm %v does not match request realm %v", rep.CRealm, req.ReqBody.Realm))
+	}
+	return nil
+}
+
+func (c *client) validateEncKdcRepPart(req datamodel.KdcReq, encRep datamodel.EncKDCRepPart) error {
+	if encRep.Nonce != req.ReqBody.NoOnce {
+		return errors.New("Potential replay attack: nonce of KRB_AS_REP did not match nonce of KRB_AS_REQ")
+	}
+	// TODO padata
+	if req.ReqBody.SName != nil && !encRep.SName.Equal(*req.ReqBody.SName) {
+		return errors.New(fmt.Sprintf(
+			"Response sname %v does not match request cname %v", req.ReqBody.SName, encRep.SName))
+	}
+	if encRep.SRealm != req.ReqBody.Realm {
+		return errors.New(fmt.Sprintf(
+			"Response srealm %v does not match request realm %v", encRep.SRealm, req.ReqBody.Realm))
+	}
+	return nil
+}
+
+func (c *client) decrypt(key datamodel.EncryptionKey, data datamodel.EncryptedData, dest interface{}) error {
 	algorithm := c.encFactory.Create(data.EType)
-	return algorithm.Decrypt(data, c.key, dest)
+	return algorithm.Decrypt(data, key, dest)
 }
 
 func (c *client) generateAuthenticator() datamodel.Authenticator {

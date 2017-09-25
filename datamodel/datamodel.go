@@ -581,8 +581,10 @@ KDCOptions      ::= KerberosFlags
         -- renew(30),
         -- validate(31)
 */
-type KdcOptions struct {
-	Data KerberosFlags
+type KdcOptions KerberosFlags
+
+func NewKdcOptions() KdcOptions {
+	return KdcOptions(NewKerberosFlags())
 }
 
 const (

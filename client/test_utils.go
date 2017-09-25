@@ -87,8 +87,9 @@ func (a mockAlgo) Decrypt(input datamodel.EncryptedData, key datamodel.Encryptio
 
 // mock transport
 type mockTransport struct {
-	sendAsReq func(t *mockTransport, req datamodel.AsReq) (error, datamodel.AsRep)
-	sendApReq func(t *mockTransport, req datamodel.ApReq) (error, datamodel.ApRep)
+	sendAsReq  func(t *mockTransport, req datamodel.AsReq) (error, datamodel.AsRep)
+	sendApReq  func(t *mockTransport, req datamodel.ApReq) (error, datamodel.ApRep)
+	sendTgsReq func(t *mockTransport, req datamodel.TgsReq) (error, datamodel.TgsRep)
 }
 
 func (t *mockTransport) SendAsReq(req datamodel.AsReq) (error, datamodel.AsRep) {
@@ -97,4 +98,8 @@ func (t *mockTransport) SendAsReq(req datamodel.AsReq) (error, datamodel.AsRep) 
 
 func (t *mockTransport) SendApReq(req datamodel.ApReq) (error, datamodel.ApRep) {
 	return t.sendApReq(t, req)
+}
+
+func (t *mockTransport) SendTgsReq(req datamodel.TgsReq) (error, datamodel.TgsRep) {
+	return t.sendTgsReq(t, req)
 }

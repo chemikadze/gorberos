@@ -67,7 +67,7 @@ func (a *authenticationServer) AuthenticationServerExchange(req datamodel.AsReq)
 	if ok, err := a.checkMinLifetime(req, startTime, expirationTime); !ok {
 		return false, err, noRep()
 	}
-	kdcFlags := req.ReqBody.KdcOptions.Data
+	kdcFlags := req.ReqBody.KdcOptions
 	renewable := kdcFlags[datamodel.KDC_FLAG_RENEWABLE_OK]
 	var renewTill *datamodel.KerberosTime
 	if renewable {
@@ -207,7 +207,7 @@ func (a *authenticationServer) getStarttime(req datamodel.AsReq) (err datamodel.
 	if difference < 0 {
 		return noError(), now, false
 	}
-	postdated := req.ReqBody.KdcOptions.Data[datamodel.KDC_FLAG_POSTDATED]
+	postdated := req.ReqBody.KdcOptions[datamodel.KDC_FLAG_POSTDATED]
 	if postdated && difference < a.clockSkew {
 		return noError(), now, false
 	}
