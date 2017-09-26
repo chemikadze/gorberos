@@ -88,6 +88,7 @@ func (a *authenticationServer) AuthenticationServerExchange(req datamodel.AsReq)
 	flags[datamodel.TKT_FLAG_PROXIABLE] = kdcFlags[datamodel.KDC_FLAG_PROXIABLE]
 	flags[datamodel.TKT_FLAG_RENEWABLE] = kdcFlags[datamodel.KDC_FLAG_RENEWABLE]
 	flags[datamodel.TKT_FLAG_INVALID] = invalid
+	flags[datamodel.TKT_FLAG_INITIAL] = true
 
 	// fill ticket info
 	encTicket := datamodel.EncTicketPart{

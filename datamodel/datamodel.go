@@ -463,6 +463,9 @@ const (
 
 	// used by TGS, to obtain replacement ticket that expires at later date
 	TKT_FLAG_RENEWABLE = 8
+
+	// got via AS rather than TGS exchange
+	TKT_FLAG_INITIAL = 9
 )
 
 /**
@@ -597,6 +600,7 @@ const (
 	KDC_FLAG_RENEWABLE      = 8
 	KDC_FLAG_RENEWABLE_OK   = 27
 	KDC_ENC_TICKET_IN_SKEY  = 28
+	KDC_FLAG_RENEW          = 30 // TODO implement in client
 )
 
 /**
