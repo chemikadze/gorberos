@@ -4,6 +4,9 @@ import "github.com/chemikadze/gorberos/datamodel"
 
 type KdcDatabase interface {
 	// get pincipal information
+	InsertPrincipal(princ PrincipalInfo) error
+
+	// get pincipal information
 	GetPrincipal(princ datamodel.PrincipalName) (PrincipalInfo, bool)
 
 	// update last request information for principal
@@ -11,6 +14,8 @@ type KdcDatabase interface {
 }
 
 type PrincipalInfo struct {
+	Name datamodel.PrincipalName
+
 	SecretKeys []datamodel.EncryptionKey
 	LastReq    datamodel.LastReq
 

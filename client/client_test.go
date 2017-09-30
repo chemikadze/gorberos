@@ -1,23 +1,26 @@
 package client
 
 import (
+	"github.com/chemikadze/gorberos/crypto"
 	"github.com/chemikadze/gorberos/datamodel"
+	"github.com/chemikadze/gorberos/tests"
 	"strings"
 	"testing"
 )
 
-func setupAsHappyPath(encFactory *mockEncFactory, transport *mockTransport) {
-	transport.sendAsReq = func(t *mockTransport, req datamodel.AsReq) (error, datamodel.AsRep) {
+func setupAsHappyPath(encFactory crypto.EncryptionFactory, transport *tests.MockTransport) {
+	transport.OnSendAsReq = func(t *tests.MockTransport, req datamodel.AsReq) (error, datamodel.AsRep) {
 		encAsRepPart := datamodel.EncAsRepPart{Nonce: req.ReqBody.Nonce}
-		err, encData := encFactory.algo.Encrypt(datamodel.EncryptionKey{}, encAsRepPart)
+		algo := encFactory.Create(encFactory.SupportedETypes()[0])
+		err, encData := algo.Encrypt(datamodel.EncryptionKey{}, encAsRepPart)
 		return err, datamodel.AsRep{EncPart: encData}
 	}
 }
 
 func TestAsReqHappyPath(t *testing.T) {
-	encFactory := newMockEncFactory()
-	transport := &mockTransport{}
-	setupAsHappyPath(&encFactory, transport)
+	encFactory := tests.NewMockEncFactory()
+	transport := &tests.MockTransport{}
+	setupAsHappyPath(encFactory, transport)
 	client := client{encFactory: encFactory, transport: transport}
 	err := client.Authenticate()
 	if err != nil {
@@ -26,11 +29,12 @@ func TestAsReqHappyPath(t *testing.T) {
 }
 
 func TestAsReqReplayAttack(t *testing.T) {
-	encFactory := newMockEncFactory()
-	transport := &mockTransport{}
-	transport.sendAsReq = func(t *mockTransport, req datamodel.AsReq) (error, datamodel.AsRep) {
+	encFactory := tests.NewMockEncFactory()
+	transport := &tests.MockTransport{}
+	transport.OnSendAsReq = func(t *tests.MockTransport, req datamodel.AsReq) (error, datamodel.AsRep) {
 		encAsRepPart := datamodel.EncAsRepPart{Nonce: 42}
-		err, encData := encFactory.algo.Encrypt(datamodel.EncryptionKey{}, encAsRepPart)
+		algo := encFactory.Create(encFactory.SupportedETypes()[0])
+		err, encData := algo.Encrypt(datamodel.EncryptionKey{}, encAsRepPart)
 		return err, datamodel.AsRep{EncPart: encData}
 	}
 	client := client{encFactory: encFactory, transport: transport}
@@ -41,14 +45,15 @@ func TestAsReqReplayAttack(t *testing.T) {
 }
 
 func TestApReqHappyPath(t *testing.T) {
-	encFactory := newMockEncFactory()
-	transport := &mockTransport{}
-	setupAsHappyPath(&encFactory, transport)
-	transport.sendApReq = func(t *mockTransport, req datamodel.ApReq) (error, datamodel.ApRep) {
+	encFactory := tests.NewMockEncFactory()
+	transport := &tests.MockTransport{}
+	setupAsHappyPath(encFactory, transport)
+	transport.OnSendApReq = func(t *tests.MockTransport, req datamodel.ApReq) (error, datamodel.ApRep) {
 		auth := datamodel.Authenticator{}
-		encFactory.algo.Decrypt(req.Authenticator, datamodel.EncryptionKey{}, &auth)
+		algo := encFactory.Create(encFactory.SupportedETypes()[0])
+		algo.Decrypt(req.Authenticator, datamodel.EncryptionKey{}, &auth)
 		encAsRep := datamodel.EncAPRepPart{CTime: auth.CTime, CUSec: auth.CUSec}
-		err, encData := encFactory.algo.Encrypt(datamodel.EncryptionKey{}, encAsRep)
+		err, encData := algo.Encrypt(datamodel.EncryptionKey{}, encAsRep)
 		return err, datamodel.ApRep{EncPart: encData}
 	}
 	client := client{encFactory: encFactory, transport: transport, apUseSessionKey: true}
@@ -63,14 +68,15 @@ func TestApReqHappyPath(t *testing.T) {
 }
 
 func TestApReqWrongCTime(t *testing.T) {
-	encFactory := newMockEncFactory()
-	transport := &mockTransport{}
-	setupAsHappyPath(&encFactory, transport)
-	transport.sendApReq = func(t *mockTransport, req datamodel.ApReq) (error, datamodel.ApRep) {
+	encFactory := tests.NewMockEncFactory()
+	transport := &tests.MockTransport{}
+	setupAsHappyPath(encFactory, transport)
+	transport.OnSendApReq = func(t *tests.MockTransport, req datamodel.ApReq) (error, datamodel.ApRep) {
 		auth := datamodel.Authenticator{}
-		encFactory.algo.Decrypt(req.Authenticator, datamodel.EncryptionKey{}, &auth)
+		algo := encFactory.Create(encFactory.SupportedETypes()[0])
+		algo.Decrypt(req.Authenticator, datamodel.EncryptionKey{}, &auth)
 		encAsRep := datamodel.EncAPRepPart{CTime: datamodel.KerberosTime{12456}, CUSec: auth.CUSec}
-		err, encData := encFactory.algo.Encrypt(datamodel.EncryptionKey{}, encAsRep)
+		err, encData := algo.Encrypt(datamodel.EncryptionKey{}, encAsRep)
 		return err, datamodel.ApRep{EncPart: encData}
 	}
 	client := client{encFactory: encFactory, transport: transport, apUseSessionKey: true}

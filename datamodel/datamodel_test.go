@@ -24,9 +24,9 @@ func TestPrincipalName(t *testing.T) {
 }
 
 func TestKerberosTime(t *testing.T) {
-	instance := KerberosTime{1234567890}
-	assertEquals(t, instance.String(), "1234567890Z")
-	parsed := KerberosTimeFromString("1234567890Z")
+	instance := KerberosTime{0}
+	assertEquals(t, instance.String(), "19700101000000Z")
+	parsed := KerberosTimeFromString("19700101000000Z")
 	assertEquals(t, parsed.Timestamp, instance.Timestamp)
 }
 

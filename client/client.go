@@ -28,9 +28,19 @@ type client struct {
 	subKey          datamodel.EncryptionKey
 }
 
-func New(transport gorberos.ClientTransport) gorberos.Client {
+type SessionParams struct {
+	CName datamodel.PrincipalName
+	SName datamodel.PrincipalName
+	Realm datamodel.Realm
+}
+
+func New(transport gorberos.ClientTransport, encFactory crypto.EncryptionFactory, params SessionParams) gorberos.Client {
 	c := client{
-		transport: transport,
+		transport:  transport,
+		encFactory: encFactory,
+		cname:      params.CName,
+		sname:      params.SName,
+		realm:      params.Realm,
 	}
 	return &c
 }
@@ -46,6 +56,7 @@ func (c *client) Authenticate() error {
 		ReqBody: datamodel.KdcReqBody{
 			KdcOptions: flags,
 			CName:      c.cname,
+			SName:      &c.sname,
 			Realm:      c.realm,
 			Till:       datamodel.KerberosTime{till},
 			Nonce:      nonce,
@@ -93,9 +104,10 @@ func (c *client) Authenticate() error {
 func (c *client) AuthenticateTgs() error {
 	flags := datamodel.NewKdcOptions()
 	nonce := crypto.GenerateNonce()
-	var till int64
+	till := datamodel.KerberosEpoch()
 	if c.keyLifetime != nil {
-		till = time.Now().Unix() + int64(*c.keyLifetime)
+		t := time.Now().Unix() + int64(*c.keyLifetime)
+		till = datamodel.KerberosTime{Timestamp: t}
 	}
 	req := datamodel.TgsReq{
 		//PaData:  []PaData // TODO support preauth data
@@ -104,7 +116,7 @@ func (c *client) AuthenticateTgs() error {
 			CName:      c.cname,
 			Realm:      c.realm,
 			SName:      &c.sname, // TODO may be absent in ENC-TKT-IN-SKEY case
-			Till:       datamodel.KerberosTime{till},
+			Till:       till,
 			Nonce:      nonce,
 			EType:      c.encFactory.SupportedETypes(),
 		},

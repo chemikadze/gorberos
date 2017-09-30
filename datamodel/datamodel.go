@@ -2,6 +2,7 @@ package datamodel
 
 import (
 	"fmt"
+	"math"
 	"net"
 	"strings"
 	"time"
@@ -58,12 +59,20 @@ func (p *PrincipalName) String() string {
 	return strings.Join(p.NameString, "/")
 }
 
+func PrincipalNameFromString(str string) PrincipalName {
+	return PrincipalName{NT_UNKNOWN, strings.Split(str, "/")}
+}
+
 type KerberosTime struct {
 	Timestamp int64
 }
 
+const (
+	KERBEROS_TIME_FORMAT = "20060102150405Z"
+)
+
 func (t KerberosTime) String() string {
-	return fmt.Sprintf("%vZ", t.Timestamp)
+	return time.Unix(t.Timestamp, 0).UTC().Format(KERBEROS_TIME_FORMAT)
 }
 
 func (t KerberosTime) AbsoluteDifference(t2 KerberosTime) int64 {
@@ -80,14 +89,21 @@ func (t KerberosTime) Difference(t2 KerberosTime) int64 {
 }
 
 func KerberosTimeFromString(str string) KerberosTime {
-	var result KerberosTime
-	fmt.Sscanf(str, "%dZ", &result.Timestamp)
-	return result
+	t, _ := time.ParseInLocation(KERBEROS_TIME_FORMAT, str, time.UTC)
+	return KerberosTime{t.Unix()}
 }
 
 func KerberosTimeNow() (t KerberosTime, usec int32) {
 	now := time.Now()
 	return KerberosTime{now.Unix()}, int32(now.Nanosecond() / 1000)
+}
+
+func KerberosEpoch() KerberosTime {
+	return KerberosTimeFromString("19700101000000Z")
+}
+
+func Forever() KerberosTime {
+	return KerberosTime{math.MaxInt64}
 }
 
 /**
@@ -984,7 +1000,7 @@ type KrbError struct {
 }
 
 func (e KrbError) Error() string {
-	return fmt.Sprintf("KRB-ERROR %s: %s", e.ErrorCode, e.EText)
+	return fmt.Sprintf("KRB-ERROR %v: %s", e.ErrorCode, e.EText)
 }
 
 /**

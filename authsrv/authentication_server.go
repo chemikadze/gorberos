@@ -13,6 +13,21 @@ type AuthenticationServer interface {
 	AuthenticationServerExchange(datamodel.AsReq) (ok bool, err datamodel.KrbError, rep datamodel.AsRep)
 }
 
+const (
+	ONE_DAY = 24 * 60 * 60
+)
+
+func NewAuthServer(realm datamodel.Realm, database database.KdcDatabase, crypto crypto.EncryptionFactory) AuthenticationServer {
+	return &authenticationServer{
+		realm:             realm,
+		database:          database,
+		crypto:            crypto,
+		maxExpirationTime: ONE_DAY,
+		maxPostdate:       ONE_DAY,
+		maxRenewTime:      ONE_DAY,
+	}
+}
+
 type authenticationServer struct {
 	database          database.KdcDatabase
 	crypto            crypto.EncryptionFactory
@@ -234,6 +249,9 @@ func getExpirationTime(
 	startTime datamodel.KerberosTime,
 	requestedTill datamodel.KerberosTime) datamodel.KerberosTime {
 
+	if requestedTill == datamodel.KerberosEpoch() {
+		requestedTill.Timestamp = math.MaxInt64
+	}
 	maxExpiration := min64(princExpirationTime, realmExpirationTime)
 	enforced := min64(requestedTill.Timestamp, startTime.Timestamp+maxExpiration)
 	return datamodel.KerberosTime{Timestamp: enforced}
@@ -241,7 +259,7 @@ func getExpirationTime(
 
 // TODO
 func (a *authenticationServer) preauthCheck(req datamodel.AsReq) (ok bool, err datamodel.KrbError) {
-	return ok, noError()
+	return true, noError()
 }
 
 func (a *authenticationServer) generateSessionKey(algo crypto.Algorithm) datamodel.EncryptionKey {
@@ -256,7 +274,7 @@ func newEmptyError(req datamodel.AsReq) datamodel.KrbError {
 		CUSec: usec,
 		//ErrorCode: ,
 		CRealm: req.ReqBody.Realm,
-		SName:  *req.ReqBody.SName,
+		//SName:  *req.ReqBody.SName,
 		//EText:     ,
 		//EData:     make([]byte, 0),
 	}
