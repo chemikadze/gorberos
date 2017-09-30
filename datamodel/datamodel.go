@@ -536,8 +536,8 @@ type KdcReqBody struct {
 	Till KerberosTime
 
 	// requested renew-till time
-	RTime  *KerberosTime
-	NoOnce uint32
+	RTime *KerberosTime
+	Nonce uint32
 
 	// desired encryption algorithm
 	EType []int32

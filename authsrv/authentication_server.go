@@ -112,7 +112,7 @@ func (a *authenticationServer) AuthenticationServerExchange(req datamodel.AsReq)
 	encAsRep := datamodel.EncAsRepPart{
 		Key:           sessionKey,
 		LastReq:       clientPrinc.LastReq,
-		Nonce:         req.ReqBody.NoOnce,
+		Nonce:         req.ReqBody.Nonce,
 		KeyExpiration: keyExpirationFromLastReq(clientPrinc.LastReq),
 		Flags:         flags,
 		AuthTime:      authTime,

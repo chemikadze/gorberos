@@ -48,7 +48,7 @@ func (c *client) Authenticate() error {
 			CName:      c.cname,
 			Realm:      c.realm,
 			Till:       datamodel.KerberosTime{till},
-			NoOnce:     nonce,
+			Nonce:      nonce,
 			EType:      c.encFactory.SupportedETypes(),
 		},
 	}
@@ -105,7 +105,7 @@ func (c *client) AuthenticateTgs() error {
 			Realm:      c.realm,
 			SName:      &c.sname, // TODO may be absent in ENC-TKT-IN-SKEY case
 			Till:       datamodel.KerberosTime{till},
-			NoOnce:     nonce,
+			Nonce:      nonce,
 			EType:      c.encFactory.SupportedETypes(),
 		},
 	}
@@ -188,7 +188,7 @@ func (c *client) validateKdcRep(req datamodel.KdcReq, rep datamodel.KdcRep) erro
 }
 
 func (c *client) validateEncKdcRepPart(req datamodel.KdcReq, encRep datamodel.EncKDCRepPart) error {
-	if encRep.Nonce != req.ReqBody.NoOnce {
+	if encRep.Nonce != req.ReqBody.Nonce {
 		return errors.New("Potential replay attack: nonce of KRB_AS_REP did not match nonce of KRB_AS_REQ")
 	}
 	// TODO padata

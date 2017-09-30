@@ -6,18 +6,18 @@ import (
 	"testing"
 )
 
-func setupHappyPath(encFactory *mockEncFactory, transport *mockTransport) {
+func setupAsHappyPath(encFactory *mockEncFactory, transport *mockTransport) {
 	transport.sendAsReq = func(t *mockTransport, req datamodel.AsReq) (error, datamodel.AsRep) {
-		encAsRepPart := datamodel.EncAsRepPart{Nonce: req.ReqBody.NoOnce}
+		encAsRepPart := datamodel.EncAsRepPart{Nonce: req.ReqBody.Nonce}
 		err, encData := encFactory.algo.Encrypt(datamodel.EncryptionKey{}, encAsRepPart)
 		return err, datamodel.AsRep{EncPart: encData}
 	}
 }
 
-func TestApReqHappyPath(t *testing.T) {
+func TestAsReqHappyPath(t *testing.T) {
 	encFactory := newMockEncFactory()
 	transport := &mockTransport{}
-	setupHappyPath(&encFactory, transport)
+	setupAsHappyPath(&encFactory, transport)
 	client := client{encFactory: encFactory, transport: transport}
 	err := client.Authenticate()
 	if err != nil {
@@ -25,7 +25,7 @@ func TestApReqHappyPath(t *testing.T) {
 	}
 }
 
-func TestApReqReplayAttack(t *testing.T) {
+func TestAsReqReplayAttack(t *testing.T) {
 	encFactory := newMockEncFactory()
 	transport := &mockTransport{}
 	transport.sendAsReq = func(t *mockTransport, req datamodel.AsReq) (error, datamodel.AsRep) {
@@ -40,10 +40,10 @@ func TestApReqReplayAttack(t *testing.T) {
 	}
 }
 
-func TestAsReqHappyPath(t *testing.T) {
+func TestApReqHappyPath(t *testing.T) {
 	encFactory := newMockEncFactory()
 	transport := &mockTransport{}
-	setupHappyPath(&encFactory, transport)
+	setupAsHappyPath(&encFactory, transport)
 	transport.sendApReq = func(t *mockTransport, req datamodel.ApReq) (error, datamodel.ApRep) {
 		auth := datamodel.Authenticator{}
 		encFactory.algo.Decrypt(req.Authenticator, datamodel.EncryptionKey{}, &auth)
@@ -62,10 +62,10 @@ func TestAsReqHappyPath(t *testing.T) {
 	}
 }
 
-func TestAsReqWrongCTime(t *testing.T) {
+func TestApReqWrongCTime(t *testing.T) {
 	encFactory := newMockEncFactory()
 	transport := &mockTransport{}
-	setupHappyPath(&encFactory, transport)
+	setupAsHappyPath(&encFactory, transport)
 	transport.sendApReq = func(t *mockTransport, req datamodel.ApReq) (error, datamodel.ApRep) {
 		auth := datamodel.Authenticator{}
 		encFactory.algo.Decrypt(req.Authenticator, datamodel.EncryptionKey{}, &auth)
