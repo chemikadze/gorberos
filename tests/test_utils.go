@@ -22,7 +22,7 @@ func newMockEncFactory() mockEncFactory {
 	return mockEncFactory{&algo}
 }
 
-func NewMockEncFactory() crypto.EncryptionFactory {
+func NewMockEncFactory() crypto.Factory {
 	return newMockEncFactory()
 }
 
@@ -32,6 +32,24 @@ func (f mockEncFactory) Create(etype int32) crypto.Algorithm {
 
 func (mockEncFactory) SupportedETypes() []int32 {
 	return []int32{42}
+}
+
+func (mockEncFactory) CreateChecksum(cktype int32) crypto.ChecksumAlgorithm {
+	return mockCksum{}
+}
+
+func (mockEncFactory) ChecksumTypeForEncryption(etype int32) (cktype int32) {
+	return etype
+}
+
+type mockCksum struct {}
+
+func (mockCksum) GetMic(key datamodel.EncryptionKey, data []byte) crypto.MIC {
+	return data
+}
+
+func (mockCksum) VerifyMic(key datamodel.EncryptionKey, data []byte, mic crypto.MIC) bool {
+	return true
 }
 
 // only encryption algorithm exposed by factory
@@ -53,8 +71,8 @@ func (a mockAlgo) EType() int32 {
 	return 42
 }
 
-func (a mockAlgo) GenerateKey() []byte {
-	return make([]byte, 0)
+func (a mockAlgo) GenerateKey() datamodel.EncryptionKey {
+	return datamodel.EncryptionKey{KeyType: a.EType(), KeyValue: make([]byte, 0)}
 }
 
 func (a *mockAlgo) Encrypt(key datamodel.EncryptionKey, input interface{}) (error, datamodel.EncryptedData) {
@@ -69,7 +87,9 @@ func (a *mockAlgo) Encrypt(key datamodel.EncryptionKey, input interface{}) (erro
 
 func (a mockAlgo) Decrypt(input datamodel.EncryptedData, key datamodel.EncryptionKey, result interface{}) error {
 	if input.EType != a.EType() {
-		return errors.New("Unsupported etype")
+		msg := fmt.Sprintf("Unsupported etype %v for algorithm %v\n\nInput: %v", input.EType, a.EType(), input)
+		panic(msg)
+		return errors.New(msg)
 	}
 	if len(input.Cipher) != 1 {
 		return errors.New("Mock encrypted data should be one byte long")
@@ -160,21 +180,21 @@ const (
 )
 
 // principal database utilities
-func newPrincInfo(name string) database.PrincipalInfo {
+func newPrincInfo(name string, key datamodel.EncryptionKey) database.PrincipalInfo {
 	return database.PrincipalInfo{
 		Name:              datamodel.PrincipalNameFromString(name),
 		MaxExpirationTime: ONE_DAY,
 		MaxRenewTime:      ONE_DAY,
-		SecretKeys:        []datamodel.EncryptionKey{{}},
+		SecretKeys:        []datamodel.EncryptionKey{key},
 	}
 }
 
 // mock server-wrapping transport
 type noopTransport struct {
-	server asrv.AuthenticationServer
+	server authsrv.KdcServer
 }
 
-func newNoopTransport(server asrv.AuthenticationServer) gorberos.ClientTransport {
+func newNoopTransport(server authsrv.KdcServer) gorberos.ClientTransport {
 	return &noopTransport{server}
 }
 
@@ -191,6 +211,11 @@ func (t *noopTransport) SendApReq(datamodel.ApReq) (error, datamodel.ApRep) {
 	return errors.New("not supported by KDC"), datamodel.ApRep{}
 }
 
-func (t *noopTransport) SendTgsReq(datamodel.TgsReq) (error, datamodel.TgsRep) {
-	return errors.New("not implemented"), datamodel.TgsRep{}
+func (t *noopTransport) SendTgsReq(req datamodel.TgsReq) (error, datamodel.TgsRep) {
+	ok, err, rep := t.server.TgsExchange(req)
+	if !ok {
+		return err, rep
+	} else {
+		return nil, rep
+	}
 }

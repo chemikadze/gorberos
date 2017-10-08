@@ -8,12 +8,14 @@ import (
 )
 
 func TestAsEndToEnd(t *testing.T) {
-	db := NewMockDatabase()
-	db.InsertPrincipal(newPrincInfo("chemikadze"))
-	db.InsertPrincipal(newPrincInfo("hive/localhost"))
-
 	crypto := NewMockEncFactory()
-	server := asrv.NewAuthServer("LOCALHOST", db, crypto)
+	algo := crypto.Create(crypto.SupportedETypes()[0])
+
+	db := NewMockDatabase()
+	db.InsertPrincipal(newPrincInfo("chemikadze", algo.GenerateKey()))
+	db.InsertPrincipal(newPrincInfo("hive/localhost", algo.GenerateKey()))
+
+	server := authsrv.NewKdcServer("LOCALHOST", db, crypto)
 	transport := newNoopTransport(server)
 
 	params := clientPackage.SessionParams{
@@ -27,5 +29,11 @@ func TestAsEndToEnd(t *testing.T) {
 
 	if err != nil {
 		t.Errorf("auth error: %v", err.Error())
+	}
+
+	err = client.AuthenticateTgs()
+
+	if err != nil {
+		t.Errorf("tgs auth error: %v", err.Error())
 	}
 }

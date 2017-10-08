@@ -34,10 +34,11 @@ type SessionParams struct {
 	Realm datamodel.Realm
 }
 
-func New(transport gorberos.ClientTransport, encFactory crypto.EncryptionFactory, params SessionParams) gorberos.Client {
+func New(transport gorberos.ClientTransport, encFactory crypto.Factory, params SessionParams) gorberos.Client {
 	c := client{
 		transport:  transport,
 		encFactory: encFactory,
+		cksumFactory: encFactory,
 		cname:      params.CName,
 		sname:      params.SName,
 		realm:      params.Realm,
@@ -55,7 +56,7 @@ func (c *client) Authenticate() error {
 	req := datamodel.AsReq{
 		ReqBody: datamodel.KdcReqBody{
 			KdcOptions: flags,
-			CName:      c.cname,
+			CName:      &c.cname,
 			SName:      &c.sname,
 			Realm:      c.realm,
 			Till:       datamodel.KerberosTime{till},
@@ -109,27 +110,36 @@ func (c *client) AuthenticateTgs() error {
 		t := time.Now().Unix() + int64(*c.keyLifetime)
 		till = datamodel.KerberosTime{Timestamp: t}
 	}
+	reqBody := datamodel.KdcReqBody{
+		KdcOptions: flags,
+		Realm:      c.realm,
+		SName:      &c.sname, // TODO may be absent in ENC-TKT-IN-SKEY case
+		Till:       till,
+		Nonce:      nonce,
+		EType:      c.encFactory.SupportedETypes(),
+	}
+	cksum := c.computeChecksum(reqBody)
+	auth := c.generateAuthenticator(&cksum)
+	err, apReq := c.generateApReq(auth)
+	if err != nil {
+		return err
+	}
+	paReq := datamodel.PaTgsReq(apReq)
+	paData := []datamodel.PaData{{Value: paReq}} // TODO other padata fields
 	req := datamodel.TgsReq{
-		//PaData:  []PaData // TODO support preauth data
-		ReqBody: datamodel.KdcReqBody{
-			KdcOptions: flags,
-			CName:      c.cname,
-			Realm:      c.realm,
-			SName:      &c.sname, // TODO may be absent in ENC-TKT-IN-SKEY case
-			Till:       till,
-			Nonce:      nonce,
-			EType:      c.encFactory.SupportedETypes(),
-		},
+		PaData:  paData,
+		ReqBody: reqBody,
 	}
 
 	err, rep := c.transport.SendTgsReq(req)
 	if err != nil {
 		return err
 	}
-	err = c.validateKdcRep(datamodel.KdcReq(req), datamodel.KdcRep(rep))
-	if err != nil {
-		return err
-	}
+	// TODO this does not seem right
+	//err = c.validateKdcRep(datamodel.KdcReq(req), datamodel.KdcRep(rep))
+	//if err != nil {
+	//	return err
+	//}
 
 	encRep := datamodel.EncTGSRepPart{}
 	err = c.decrypt(c.encAsRep.Key, rep.EncPart, &encRep)
@@ -148,20 +158,12 @@ func (c *client) AuthenticateTgs() error {
 }
 
 func (c *client) AuthenticateApplication() error {
-	flags := datamodel.NewApOptions()
-	flags[datamodel.AP_FLAG_USE_SESSION_KEY] = c.apUseSessionKey
-	flags[datamodel.AP_FLAG_MUTUAL_REQUIRED] = c.apMutualAuth
 	var key datamodel.EncryptionKey
 	key = c.appEncTicket.Key
-	auth := c.generateAuthenticator()
-	err, encAuth := c.encryptAuthenticator(c.encAsRep.Key, auth)
+	auth := c.generateAuthenticator(nil)
+	err, req := c.generateApReq(auth)
 	if err != nil {
 		return err
-	}
-	req := datamodel.ApReq{
-		ApOptions:     flags,
-		Ticket:        c.tgt,
-		Authenticator: encAuth,
 	}
 	err, rep := c.transport.SendApReq(req)
 	if err != nil {
@@ -187,8 +189,23 @@ func (c *client) AuthenticateApplication() error {
 	return nil
 }
 
+func (c *client) generateApReq(auth datamodel.Authenticator) (error, datamodel.ApReq) {
+	flags := datamodel.NewApOptions()
+	flags[datamodel.AP_FLAG_USE_SESSION_KEY] = c.apUseSessionKey
+	flags[datamodel.AP_FLAG_MUTUAL_REQUIRED] = c.apMutualAuth
+	err, encAuth := c.encryptAuthenticator(c.encAsRep.Key, auth)
+	if err != nil {
+		return err, datamodel.ApReq{}
+	}
+	return nil, datamodel.ApReq{
+		ApOptions:     flags,
+		Ticket:        c.tgt,
+		Authenticator: encAuth,
+	}
+}
+
 func (c *client) validateKdcRep(req datamodel.KdcReq, rep datamodel.KdcRep) error {
-	if !rep.CName.Equal(req.ReqBody.CName) {
+	if !rep.CName.Equal(*req.ReqBody.CName) {
 		return errors.New(fmt.Sprintf(
 			"Response cname %v does not match request cname %v", rep.CName, req.ReqBody.CName))
 	}
@@ -220,14 +237,23 @@ func (c *client) decrypt(key datamodel.EncryptionKey, data datamodel.EncryptedDa
 	return algorithm.Decrypt(data, key, dest)
 }
 
-func (c *client) generateAuthenticator() datamodel.Authenticator {
+func (c *client) computeChecksum(reqBody datamodel.KdcReqBody) datamodel.Checksum {
+	key := c.encAsRep.Key
+	ckType := c.cksumFactory.ChecksumTypeForEncryption(key.KeyType)
+	ckAlgo := c.cksumFactory.CreateChecksum(ckType)
+	data := make([]byte, 0) // TODO serialize
+	mic := ckAlgo.GetMic(key, data)
+	return datamodel.Checksum{ckType, mic}
+}
+
+func (c *client) generateAuthenticator(cksum *datamodel.Checksum) datamodel.Authenticator {
 	// TODO Client implementations SHOULD ensure that the timestamps are not reused
 	ctime, usec := datamodel.KerberosTimeNow()
 	return datamodel.Authenticator{
 		AuthenticatorVNo:  5,
 		CRealm:            c.realm,
 		CName:             c.cname,
-		CKSum:             nil, // TODO calculate checksum
+		CKSum:             cksum,
 		CUSec:             usec,
 		CTime:             ctime,
 		SubKey:            nil, // session key from ticket will be used

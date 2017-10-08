@@ -23,7 +23,7 @@ type Algorithm interface {
 	EType() int32
 	Decrypt(input datamodel.EncryptedData, key datamodel.EncryptionKey, result interface{}) error
 	Encrypt(key datamodel.EncryptionKey, input interface{}) (error, datamodel.EncryptedData)
-	GenerateKey() []byte
+	GenerateKey() datamodel.EncryptionKey
 }
 
 type MIC []byte
