@@ -248,7 +248,7 @@ func (c *client) computeChecksum(reqBody datamodel.KdcReqBody) datamodel.Checksu
 
 func (c *client) generateAuthenticator(cksum *datamodel.Checksum) datamodel.Authenticator {
 	// TODO Client implementations SHOULD ensure that the timestamps are not reused
-	ctime, usec := datamodel.KerberosTimeNow()
+	ctime, usec := datamodel.KerberosTimeNowUsec()
 	return datamodel.Authenticator{
 		AuthenticatorVNo:  5,
 		CRealm:            c.realm,

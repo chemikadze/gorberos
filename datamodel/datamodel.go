@@ -88,14 +88,27 @@ func (t KerberosTime) Difference(t2 KerberosTime) int64 {
 	return t.Timestamp - t2.Timestamp
 }
 
+func (t KerberosTime) Plus(seconds int64) KerberosTime {
+	return KerberosTime{t.Timestamp + seconds}
+}
+
+func (t KerberosTime) Minus(seconds int64) KerberosTime {
+	return KerberosTime{t.Timestamp - seconds}
+}
+
 func KerberosTimeFromString(str string) KerberosTime {
 	t, _ := time.ParseInLocation(KERBEROS_TIME_FORMAT, str, time.UTC)
 	return KerberosTime{t.Unix()}
 }
 
-func KerberosTimeNow() (t KerberosTime, usec int32) {
+func KerberosTimeNowUsec() (t KerberosTime, usec int32) {
 	now := time.Now()
 	return KerberosTime{now.Unix()}, int32(now.Nanosecond() / 1000)
+}
+
+func KerberosTimeNow() KerberosTime {
+	now, _ := KerberosTimeNowUsec()
+	return now
 }
 
 func KerberosEpoch() KerberosTime {
@@ -1108,6 +1121,7 @@ const (
 	KDC_ERR_CANNOT_POSTDATE     = 10
 	KDC_ERR_NEVER_VALID         = 11
 	KDC_ERR_PADATA_TYPE_NOSUPP  = 16
+	KDC_ERR_TGT_REVOKED         = 20
 	KDC_ERR_PREAUTH_REQUIRED    = 25
 	KRB_AP_ERR_BAD_INTEGRITY    = 31
 	KRB_AP_ERR_TKT_EXPIRED      = 32
@@ -1124,7 +1138,7 @@ const (
 )
 
 func NewEmptyError(realm Realm, sname PrincipalName) KrbError {
-	ctime, usec := KerberosTimeNow()
+	ctime, usec := KerberosTimeNowUsec()
 	return KrbError{
 		CTime: ctime,
 		CUSec: usec,

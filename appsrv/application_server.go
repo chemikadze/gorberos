@@ -55,7 +55,7 @@ func (a *applicationServer) ApplicationServerExchange(req datamodel.ApReq) (ok b
 	// If no match is found or the server insists on ticket addresses
 	// but none are present in the ticket, the KRB_AP_ERR_BADADDR error is returned
 
-	stime, _ := datamodel.KerberosTimeNow()
+	stime, _ := datamodel.KerberosTimeNowUsec()
 	if auth.CTime.AbsoluteDifference(stime) > a.clockSkew {
 		return false, datamodel.NewErrorC(a.defaultRealm, a.principal, datamodel.KRB_AP_ERR_SKEW), noRep()
 	}

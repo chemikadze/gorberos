@@ -10,30 +10,25 @@ import (
 )
 
 type KdcServer interface {
-	AuthenticationServer
-	TicketGrantingServer
-}
-
-type AuthenticationServer interface {
 	AuthenticationServerExchange(datamodel.AsReq) (ok bool, err datamodel.KrbError, rep datamodel.AsRep)
-}
-
-type TicketGrantingServer interface {
 	TgsExchange(datamodel.TgsReq) (ok bool, err datamodel.KrbError, rep datamodel.TgsRep)
+	RevokeTickets(starTime, endTime datamodel.KerberosTime)
 }
 
 const (
-	ONE_DAY = 24 * 60 * 60
+	ONE_DAY = int64(24 * 60 * 60)
 )
 
 func NewKdcServer(realm datamodel.Realm, database database.KdcDatabase, crypto crypto.Factory) KdcServer {
+	maxLifetime := ONE_DAY
 	return &authenticationServer{
 		realm:             realm,
 		database:          database,
 		crypto:            crypto,
-		maxExpirationTime: ONE_DAY,
+		maxExpirationTime: maxLifetime,
 		maxPostdate:       ONE_DAY,
 		maxRenewTime:      ONE_DAY,
+		revocationHotlist: NewRevocationHotlist(maxLifetime),
 	}
 }
 
@@ -47,6 +42,11 @@ type authenticationServer struct {
 	maxPostdate       int64
 	maxExpirationTime int64
 	tgsPrinc          datamodel.PrincipalName
+	revocationHotlist RevocationHotlist
+}
+
+func (a *authenticationServer) RevokeTickets(starTime, endTime datamodel.KerberosTime) {
+	a.revocationHotlist.Revoke(starTime, endTime)
 }
 
 func (a *authenticationServer) AuthenticationServerExchange(req datamodel.AsReq) (ok bool, err datamodel.KrbError, rep datamodel.AsRep) {
@@ -350,6 +350,15 @@ func min64(a, b int64) int64 {
 	}
 }
 
+func max64(a, b int64) int64 {
+	if a < b {
+		return b
+	} else {
+		return a
+	}
+}
+
+
 func noError() datamodel.KrbError {
 	return datamodel.KrbError{}
 }
@@ -359,7 +368,7 @@ func noRep() datamodel.AsRep {
 }
 
 func kerberosNow() (t datamodel.KerberosTime, usec int32) {
-	return datamodel.KerberosTimeNow()
+	return datamodel.KerberosTimeNowUsec()
 }
 
 func keyExpirationFromLastReq(lastReq datamodel.LastReq) *datamodel.KerberosTime {
@@ -483,7 +492,7 @@ func (a *authenticationServer) TgsExchange(req datamodel.TgsReq) (ok bool, kerr 
 
 	//TODO serverPrincIsTgs := sname.Equal(a.tgsPrinc)
 	// TODO check server is registered in the realm of the KDC
-	now, _ := datamodel.KerberosTimeNow()
+	now, _ := datamodel.KerberosTimeNowUsec()
 	if kdcFlags[datamodel.KDC_FLAG_RENEW] {
 		validated :=
 			encTicket.Flags[datamodel.TKT_FLAG_RENEWABLE] &&
@@ -514,7 +523,9 @@ func (a *authenticationServer) TgsExchange(req datamodel.TgsReq) (ok bool, kerr 
 	if encTicket.Flags[datamodel.KDC_FLAG_RENEWABLE] {
 		renewTill = encTicket.RenewTill
 	}
-	// TODO hotlist check
+	if a.revocationHotlist.IsRevoked(encTicket.AuthTime) {
+		return false, newTgsErrorFromReq(req, datamodel.KDC_ERR_TGT_REVOKED), noTgsRep()
+	}
 
 	oldStartTime := encTicket.AuthTime
 	if encTicket.StartTime != nil {
