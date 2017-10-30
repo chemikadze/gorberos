@@ -89,7 +89,7 @@ func (a *authenticationServer) AuthenticationServerExchange(req datamodel.AsReq)
 	}
 	expirationTime := getTgtExpirationTime(
 		a.maxExpirationTime, clientPrinc.MaxExpirationTime, startTime, req.ReqBody.Till)
-	if ok, err := a.checkMinLifetime(req, startTime, expirationTime); !ok {
+	if ok, err := a.checkMinLifetime(datamodel.KdcReq(req), startTime, expirationTime); !ok {
 		return false, err, noRep()
 	}
 	kdcFlags := req.ReqBody.KdcOptions
@@ -304,9 +304,9 @@ func newKdcError(req datamodel.KdcReq) datamodel.KrbError {
 	return err
 }
 
-func (a *authenticationServer) checkMinLifetime(req datamodel.AsReq, startTime datamodel.KerberosTime, expirationTime datamodel.KerberosTime) (bool, datamodel.KrbError) {
+func (a *authenticationServer) checkMinLifetime(req datamodel.KdcReq, startTime datamodel.KerberosTime, expirationTime datamodel.KerberosTime) (bool, datamodel.KrbError) {
 	if expirationTime.Timestamp-startTime.Timestamp < a.minTicketLifetime {
-		err := newAsError(req)
+		err := newKdcError(req)
 		err.ErrorCode = datamodel.KDC_ERR_NEVER_VALID
 		return false, err
 	} else {
@@ -536,10 +536,9 @@ func (a *authenticationServer) TgsExchange(req datamodel.TgsReq) (ok bool, kerr 
 		req.ReqBody.Till, encTicket.EndTime, startTime, appMaxLifetime, a.maxExpirationTime,
 		encTicket.RenewTill, oldStartTime) // TODO check KDC_FLAG_RENEW
 
-	//// TODO should be there at all?
-	//if ok, err := a.checkMinLifetime(req, startTime, expirationTime); !ok {
-	//	return false, err, noRep()
-	//}
+	if ok, err := a.checkMinLifetime(datamodel.KdcReq(req), startTime, expirationTime); !ok {
+		return false, err, noTgsRep()
+	}
 
 	effectiveSessionKey := currentSessionKey
 	if encAuth.SubKey != nil {
