@@ -21,6 +21,14 @@ type PrincipalName struct {
 	NameString []string
 }
 
+const (
+	KRBTGT = "krbtgt"
+)
+
+func KrbTgtForRealm(tgtRealm Realm) PrincipalName {
+	return PrincipalName{NameString: []string{KRBTGT, tgtRealm.String()}}
+}
+
 func (n PrincipalName) Equal(other PrincipalName) bool {
 	if n.NameType != other.NameType || len(n.NameString) != len(other.NameString) {
 		return false
@@ -55,7 +63,7 @@ const (
 	MSG_TYPE_KRB_AP_REQ = 14
 )
 
-func (p *PrincipalName) String() string {
+func (p PrincipalName) String() string {
 	return strings.Join(p.NameString, "/")
 }
 
@@ -265,10 +273,10 @@ const (
 )
 
 /**
-   padata-value will contain an encoded AP-REQ.  The checksum in the
-   authenticator (which MUST be collision-proof) is to be computed over
-   the KDC-REQ-BODY encoding.
- */
+  padata-value will contain an encoded AP-REQ.  The checksum in the
+  authenticator (which MUST be collision-proof) is to be computed over
+  the KDC-REQ-BODY encoding.
+*/
 type PaTgsReq ApReq
 
 func (PaTgsReq) PaType() int32 {
@@ -1116,7 +1124,7 @@ const (
 	KDC_ERR_NONE                = 0
 	KDC_ERR_C_PRINCIPAL_UNKNOWN = 6
 	KDC_ERR_S_PRINCIPAL_UNKNOWN = 7
-	KDC_ERR_POLICY				= 12
+	KDC_ERR_POLICY              = 12
 	KDC_ERR_ETYPE_NOSUPP        = 14
 	KDC_ERR_CANNOT_POSTDATE     = 10
 	KDC_ERR_NEVER_VALID         = 11

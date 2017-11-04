@@ -10,7 +10,7 @@ import (
 
 func setupAsHappyPath(encFactory crypto.EncryptionFactory, transport *tests.MockTransport) {
 	transport.OnSendAsReq = func(t *tests.MockTransport, req datamodel.AsReq) (error, datamodel.AsRep) {
-		encAsRepPart := datamodel.EncAsRepPart{Nonce: req.ReqBody.Nonce}
+		encAsRepPart := datamodel.EncAsRepPart{Nonce: req.ReqBody.Nonce, SName: *req.ReqBody.SName}
 		algo := encFactory.Create(encFactory.SupportedETypes()[0])
 		err, encData := algo.Encrypt(datamodel.EncryptionKey{}, encAsRepPart)
 		return err, datamodel.AsRep{EncPart: encData}

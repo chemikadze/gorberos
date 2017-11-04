@@ -36,12 +36,12 @@ type SessionParams struct {
 
 func New(transport gorberos.ClientTransport, encFactory crypto.Factory, params SessionParams) gorberos.Client {
 	c := client{
-		transport:  transport,
-		encFactory: encFactory,
+		transport:    transport,
+		encFactory:   encFactory,
 		cksumFactory: encFactory,
-		cname:      params.CName,
-		sname:      params.SName,
-		realm:      params.Realm,
+		cname:        params.CName,
+		sname:        params.SName,
+		realm:        params.Realm,
 	}
 	return &c
 }
@@ -53,11 +53,12 @@ func (c *client) Authenticate() error {
 		till = time.Now().Unix() + int64(*c.keyLifetime)
 	}
 	flags := datamodel.NewKdcOptions()
+	krbTgt := datamodel.KrbTgtForRealm(c.realm)
 	req := datamodel.AsReq{
 		ReqBody: datamodel.KdcReqBody{
 			KdcOptions: flags,
 			CName:      &c.cname,
-			SName:      &c.sname,
+			SName:      &krbTgt,
 			Realm:      c.realm,
 			Till:       datamodel.KerberosTime{till},
 			Nonce:      nonce,
@@ -207,11 +208,11 @@ func (c *client) generateApReq(auth datamodel.Authenticator) (error, datamodel.A
 func (c *client) validateKdcRep(req datamodel.KdcReq, rep datamodel.KdcRep) error {
 	if !rep.CName.Equal(*req.ReqBody.CName) {
 		return errors.New(fmt.Sprintf(
-			"Response cname %v does not match request cname %v", rep.CName, req.ReqBody.CName))
+			"Response cname '%v' does not match request cname '%v'", rep.CName, req.ReqBody.CName))
 	}
 	if rep.CRealm != req.ReqBody.Realm {
 		return errors.New(fmt.Sprintf(
-			"Response crealm %v does not match request realm %v", rep.CRealm, req.ReqBody.Realm))
+			"Response crealm '%v' does not match request realm '%v'", rep.CRealm, req.ReqBody.Realm))
 	}
 	return nil
 }
@@ -223,11 +224,11 @@ func (c *client) validateEncKdcRepPart(req datamodel.KdcReq, encRep datamodel.En
 	// TODO padata
 	if req.ReqBody.SName != nil && !encRep.SName.Equal(*req.ReqBody.SName) {
 		return errors.New(fmt.Sprintf(
-			"Response sname %v does not match request cname %v", req.ReqBody.SName, encRep.SName))
+			"Response sname '%v' does not match request sname '%v'", encRep.SName, req.ReqBody.SName))
 	}
 	if encRep.SRealm != req.ReqBody.Realm {
 		return errors.New(fmt.Sprintf(
-			"Response srealm %v does not match request realm %v", encRep.SRealm, req.ReqBody.Realm))
+			"Response srealm '%v' does not match request realm '%v'", encRep.SRealm, req.ReqBody.Realm))
 	}
 	return nil
 }

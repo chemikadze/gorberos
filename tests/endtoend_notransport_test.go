@@ -12,16 +12,18 @@ func TestAsEndToEnd(t *testing.T) {
 	algo := crypto.Create(crypto.SupportedETypes()[0])
 
 	db := NewMockDatabase()
+	realm := datamodel.Realm("LOCALHOST")
 	db.InsertPrincipal(newPrincInfo("chemikadze", algo.GenerateKey()))
+	db.InsertPrincipal(newPrincInfo(datamodel.KrbTgtForRealm(realm).String(), algo.GenerateKey()))
 	db.InsertPrincipal(newPrincInfo("hive/localhost", algo.GenerateKey()))
 
-	server := authsrv.NewKdcServer("LOCALHOST", db, crypto)
+	server := authsrv.NewKdcServer(realm, db, crypto)
 	transport := newNoopTransport(server)
 
 	params := clientPackage.SessionParams{
 		CName: datamodel.PrincipalNameFromString("chemikadze"),
 		SName: datamodel.PrincipalNameFromString("hive/localhost"),
-		Realm: datamodel.Realm("LOCALHOST"),
+		Realm: realm,
 	}
 	client := clientPackage.New(transport, crypto, params)
 
