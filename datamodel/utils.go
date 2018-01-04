@@ -7,6 +7,8 @@ import (
 	"time"
 )
 
+//go:generate asn1go -package datamodel rfc4120.asn1 rfc4120_generated.go
+
 // KrbError
 
 func NewEmptyError(realm Realm, sname PrincipalName) KrbError {
