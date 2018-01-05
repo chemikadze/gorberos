@@ -16,20 +16,28 @@ type revocation struct {
 	to datamodel.KerberosTime
 }
 
+func (r revocation) String() string {
+	return fmt.Sprintf("{from:%v, to:%v}", r.from, r.to)
+}
+
+func (r revocation) Equal(other revocation) bool {
+	return r.from.Equal(other.from) && r.to.Equal(other.to)
+}
+
 func (r revocation) Intersects(other revocation) bool {
-	return r.from.Timestamp <= other.to.Timestamp && r.to.Timestamp >= other.from.Timestamp
+	return r.from.ToUnix() <= other.to.ToUnix() && r.to.ToUnix() >= other.from.ToUnix()
 }
 
 func (r revocation) Contains(point datamodel.KerberosTime) bool {
-	return r.from.Timestamp <= point.Timestamp && point.Timestamp <= r.to.Timestamp
+	return r.from.ToUnix() <= point.ToUnix() && point.ToUnix() <= r.to.ToUnix()
 }
 
 func (r revocation) ToLeftOf(other revocation) bool {
-	return r.to.Timestamp < other.from.Timestamp
+	return r.to.ToUnix() < other.from.ToUnix()
 }
 
 func (r revocation) ToRightOf(other revocation) bool {
-	return r.from.Timestamp > other.to.Timestamp
+	return r.from.ToUnix() > other.to.ToUnix()
 }
 
 func (r revocation) Merge(other revocation) revocation {
@@ -37,8 +45,8 @@ func (r revocation) Merge(other revocation) revocation {
 		panic(fmt.Sprintf("Can't merge non-intersecting ranges %v and %v", r, other))
 	}
 	return revocation{
-		from: datamodel.KerberosTime{min64(r.from.Timestamp, other.from.Timestamp)},
-		to: datamodel.KerberosTime{max64(r.to.Timestamp, other.to.Timestamp)},
+		from: r.from.Min(other.from),
+		to: r.to.Max(other.to),
 	}
 }
 
@@ -60,13 +68,13 @@ func NewRevocationHotlist(maxLifetime int64) RevocationHotlist {
 }
 
 func (r *revocationHotlist) Revoke(startTime datamodel.KerberosTime, endTime datamodel.KerberosTime) {
-	if startTime.Timestamp > endTime.Timestamp {
+	if startTime.ToUnix() > endTime.ToUnix() {
 		panic(fmt.Sprintf("startTime %v for revoked timestamp > endTime %v", startTime, endTime))
 	}
 	inserted := revocation{from: startTime, to:endTime}
-	if len(r.revocations) == 0 || r.revocations[len(r.revocations)-1].to.Timestamp < inserted.from.Timestamp {
+	if len(r.revocations) == 0 || r.revocations[len(r.revocations)-1].to.ToUnix() < inserted.from.ToUnix() {
 		r.revocations = append(r.revocations, inserted)
-	} else if inserted.to.Timestamp < r.revocations[0].from.Timestamp {
+	} else if inserted.to.ToUnix() < r.revocations[0].from.ToUnix() {
 		r.revocations = append(append(make([]revocation, 0), inserted), r.revocations...)
 	} else {
 		for i, curr := range r.revocations {
@@ -114,18 +122,18 @@ func (r *revocationHotlist) cleanup() {
 		return
 	}
 	// all valid
-	if revocationPoint.Timestamp < r.revocations[0].from.Timestamp {
+	if revocationPoint.ToUnix() < r.revocations[0].from.ToUnix() {
 		return
 	}
 	// all invalid
-	if r.revocations[len(r.revocations)-1].to.Timestamp < revocationPoint.Timestamp {
+	if r.revocations[len(r.revocations)-1].to.ToUnix() < revocationPoint.ToUnix() {
 		r.revocations = make([]revocation, 0)
 	}
 	// locate invalid prefix and drop
 	for i := 1; i < len(r.revocations); i++ {
 		curr := r.revocations[i]
 		prev := r.revocations[i-1]
-		if prev.to.Timestamp < revocationPoint.Timestamp && curr.to.Timestamp >= revocationPoint.Timestamp {
+		if prev.to.ToUnix() < revocationPoint.ToUnix() && curr.to.ToUnix() >= revocationPoint.ToUnix() {
 			retained := make([]revocation, len(r.revocations) - i)
 			copy(retained, r.revocations[i:])
 			r.revocations = retained

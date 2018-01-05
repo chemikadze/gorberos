@@ -10,8 +10,8 @@ import (
 )
 
 type KdcServer interface {
-	AuthenticationServerExchange(datamodel.AsReq) (ok bool, err datamodel.KrbError, rep datamodel.AsRep)
-	TgsExchange(datamodel.TgsReq) (ok bool, err datamodel.KrbError, rep datamodel.TgsRep)
+	AuthenticationServerExchange(datamodel.AS_REQ) (ok bool, err datamodel.KRB_ERROR, rep datamodel.AS_REP)
+	TgsExchange(datamodel.TGS_REQ) (ok bool, err datamodel.KRB_ERROR, rep datamodel.TGS_REP)
 	RevokeTickets(starTime, endTime datamodel.KerberosTime)
 }
 
@@ -23,6 +23,7 @@ func NewKdcServer(realm datamodel.Realm, database database.KdcDatabase, crypto c
 	maxLifetime := ONE_DAY
 	return &authenticationServer{
 		realm:             realm,
+		serializer:        datamodel.NewSerializer(),
 		database:          database,
 		crypto:            crypto,
 		maxExpirationTime: maxLifetime,
@@ -35,6 +36,7 @@ func NewKdcServer(realm datamodel.Realm, database database.KdcDatabase, crypto c
 type authenticationServer struct {
 	database          database.KdcDatabase
 	crypto            crypto.Factory
+	serializer		  datamodel.Serializer
 	clockSkew         int64
 	minTicketLifetime int64
 	maxRenewTime      int64
@@ -49,17 +51,17 @@ func (a *authenticationServer) RevokeTickets(starTime, endTime datamodel.Kerbero
 	a.revocationHotlist.Revoke(starTime, endTime)
 }
 
-func (a *authenticationServer) AuthenticationServerExchange(req datamodel.AsReq) (ok bool, err datamodel.KrbError, rep datamodel.AsRep) {
+func (a *authenticationServer) AuthenticationServerExchange(req datamodel.AS_REQ) (ok bool, err datamodel.KRB_ERROR, rep datamodel.AS_REP) {
 	// initial integrity verification
-	if req.ReqBody.SName == nil || req.ReqBody.CName == nil {
+	if req.Req_body.Sname.IsEmpty() || req.Req_body.Cname.IsEmpty() {
 		err := newAsError(req)
-		err.ErrorCode = 42
-		err.EText = "sname or cname missing in request body"
+		err.Error_code = 42
+		err.E_text = "Sname or Cname missing in request body"
 		return false, err, noRep()
 	}
-	sname := *req.ReqBody.SName
+	sname := req.Req_body.Sname
 
-	cname := *req.ReqBody.CName
+	cname := req.Req_body.Cname
 	// get principal info from database
 	clientPrinc, ok := a.database.GetPrincipal(cname)
 	if !ok {
@@ -76,28 +78,29 @@ func (a *authenticationServer) AuthenticationServerExchange(req datamodel.AsReq)
 	}
 
 	// find best encryption algorithm and keys
-	if !a.checkEtypes(req.ReqBody.EType) {
+	if !a.checkEtypes(req.Req_body.Etype) {
 		return false, algorithmNotFoundError(req), noRep()
 	}
-	ok, clientKey := a.getSupportedKey(req.ReqBody.EType, clientPrinc.SecretKeys)
-	sessionAlgo := a.selectSessionKeyAlgo(req.ReqBody.EType)
+	ok, clientKey := a.getSupportedKey(req.Req_body.Etype, clientPrinc.SecretKeys)
+	sessionAlgo := a.selectSessionKeyAlgo(req.Req_body.Etype)
 	sessionKey := sessionAlgo.GenerateKey()
 	// TODO support POSTDATE
 	err, startTime, invalid := a.getStarttime(req)
-	if err.ErrorCode != datamodel.KDC_ERR_NONE {
+	if err.Error_code != datamodel.KDC_ERR_NONE {
 		return false, err, noRep()
 	}
 	expirationTime := getTgtExpirationTime(
-		a.maxExpirationTime, clientPrinc.MaxExpirationTime, startTime, req.ReqBody.Till)
-	if ok, err := a.checkMinLifetime(datamodel.KdcReq(req), startTime, expirationTime); !ok {
+		a.maxExpirationTime, clientPrinc.MaxExpirationTime,
+		datamodel.KerberosTime(startTime),
+		datamodel.KerberosTime(req.Req_body.Till))
+	if ok, err := a.checkMinLifetime(datamodel.KDC_REQ(req), startTime, expirationTime); !ok {
 		return false, err, noRep()
 	}
-	kdcFlags := req.ReqBody.KdcOptions
-	renewable := kdcFlags[datamodel.KDC_FLAG_RENEWABLE_OK]
-	var renewTill *datamodel.KerberosTime
+	kdcFlags := datamodel.KDCOptions(req.Req_body.Kdc_options)
+	renewable := kdcFlags.Get(datamodel.KDC_FLAG_RENEWABLE_OK)
+	var renewTill datamodel.KerberosTime
 	if renewable {
-		renew := a.calcNextRenewTill(clientPrinc, serverPrinc, req.ReqBody.RTime)
-		renewTill = &renew
+		renewTill = a.calcNextRenewTill(clientPrinc, serverPrinc, datamodel.KerberosTime(req.Req_body.Rtime))
 	}
 
 	// update lr info
@@ -107,79 +110,79 @@ func (a *authenticationServer) AuthenticationServerExchange(req datamodel.AsReq)
 
 	// set ticket flags
 	flags := datamodel.NewTicketFlags()
-	flags[datamodel.TKT_FLAG_FORWARDABLE] = kdcFlags[datamodel.KDC_FLAG_FORWARDABLE]
-	flags[datamodel.TKT_FLAG_MAY_POSTDATE] = kdcFlags[datamodel.KDC_FLAG_ALLOW_POSTDATE]
-	flags[datamodel.TKT_FLAG_POSTDATED] = kdcFlags[datamodel.KDC_FLAG_POSTDATED]
-	flags[datamodel.TKT_FLAG_PROXIABLE] = kdcFlags[datamodel.KDC_FLAG_PROXIABLE]
-	flags[datamodel.TKT_FLAG_RENEWABLE] = kdcFlags[datamodel.KDC_FLAG_RENEWABLE]
-	flags[datamodel.TKT_FLAG_INVALID] = invalid
-	flags[datamodel.TKT_FLAG_INITIAL] = true
+	flags.Set(datamodel.TKT_FLAG_FORWARDABLE, kdcFlags.Get(datamodel.KDC_FLAG_FORWARDABLE))
+	flags.Set(datamodel.TKT_FLAG_MAY_POSTDATE, kdcFlags.Get(datamodel.KDC_FLAG_ALLOW_POSTDATE))
+	flags.Set(datamodel.TKT_FLAG_POSTDATED, kdcFlags.Get(datamodel.KDC_FLAG_POSTDATED))
+	flags.Set(datamodel.TKT_FLAG_PROXIABLE, kdcFlags.Get(datamodel.KDC_FLAG_PROXIABLE))
+	flags.Set(datamodel.TKT_FLAG_RENEWABLE, kdcFlags.Get(datamodel.KDC_FLAG_RENEWABLE))
+	flags.Set(datamodel.TKT_FLAG_INVALID, invalid)
+	flags.Set(datamodel.TKT_FLAG_INITIAL, true)
 
 	// fill ticket info
 	encTicket := datamodel.EncTicketPart{
-		Flags:  flags,
+		Flags:  flags.ToWire(),
 		Key:    sessionKey,
-		CRealm: req.ReqBody.Realm,
-		CName:  cname,
+		Crealm: req.Req_body.Realm,
+		Cname:  cname,
 		//Transited         TransitedEncoding
-		AuthTime:  authTime,
-		StartTime: &startTime,
-		EndTime:   expirationTime,
-		RenewTill: renewTill,
-		CAddr:     req.ReqBody.Addresses,
+		Authtime:  authTime.ToWire(),
+		Starttime: startTime.ToWire(),
+		Endtime:   expirationTime.ToWire(),
+		Renew_till: renewTill.ToWire(),
+		Caddr:     req.Req_body.Addresses,
 		//AuthorizationData AuthorizationData
 	}
 	ticket := datamodel.Ticket{
 		Realm:   a.realm,
-		SName:   sname,
-		EncPart: a.encryptTicketPart(serverPrinc.SecretKeys, encTicket),
+		Sname:   sname,
+		Enc_part: a.encryptTicketPart(serverPrinc.SecretKeys, encTicket),
 	}
-	encAsRep := datamodel.EncAsRepPart{
+	encAsRep := datamodel.EncASRepPart{
 		Key:           sessionKey,
-		LastReq:       clientPrinc.LastReq,
-		Nonce:         req.ReqBody.Nonce,
-		KeyExpiration: keyExpirationFromLastReq(clientPrinc.LastReq),
-		Flags:         flags,
-		AuthTime:      authTime,
-		StartTime:     &startTime,
-		EndTime:       expirationTime,
-		RenewTill:     renewTill,
-		SRealm:        a.realm,
-		SName:         sname,
-		CAddr:         req.ReqBody.Addresses,
+		Last_req:       clientPrinc.LastReq,
+		Nonce:         req.Req_body.Nonce,
+		Key_expiration: keyExpirationFromLastReq(clientPrinc.LastReq).ToWire(),
+		Flags:         flags.ToWire(),
+		Authtime:      authTime.ToWire(),
+		Starttime:     startTime.ToWire(),
+		Endtime:       expirationTime.ToWire(),
+		Renew_till:     renewTill.ToWire(),
+		Srealm:        a.realm,
+		Sname:         sname,
+		Caddr:         req.Req_body.Addresses,
 	}
-	rep = datamodel.AsRep{
-		PaData:  make([]datamodel.PaData, 0), // TODO
-		CRealm:  req.ReqBody.Realm,
-		CName:   cname,
+	rep = datamodel.AS_REP{
+		Padata:  make([]datamodel.PA_DATA, 0), // TODO
+		Crealm:  req.Req_body.Realm,
+		Cname:   cname,
 		Ticket:  ticket,
-		EncPart: a.encryptAsRepPart(clientKey, encAsRep),
+		Enc_part: a.encryptAsRepPart(clientKey, encAsRep),
 	}
 	return true, noError(), rep
 }
 
-func newAsErrorFromReq(req datamodel.AsReq, code int32) datamodel.KrbError {
-	return newErrorFromReq(datamodel.KdcReq(req), code)
+func newAsErrorFromReq(req datamodel.AS_REQ, code int32) datamodel.KRB_ERROR {
+	return newErrorFromReq(datamodel.KDC_REQ(req), code)
 }
 
-func newTgsErrorFromReq(req datamodel.TgsReq, code int32) datamodel.KrbError {
-	return newErrorFromReq(datamodel.KdcReq(req), code)
+func newTgsErrorFromReq(req datamodel.TGS_REQ, code int32) datamodel.KRB_ERROR {
+	return newErrorFromReq(datamodel.KDC_REQ(req), code)
 }
 
-func newErrorFromReq(req datamodel.KdcReq, code int32) datamodel.KrbError {
+func newErrorFromReq(req datamodel.KDC_REQ, code int32) datamodel.KRB_ERROR {
 	ctime := time.Now()
-	return datamodel.KrbError{
-		CTime:     datamodel.KerberosTime{ctime.Unix()},
-		CUSec:     int32(ctime.Nanosecond() / 1000),
-		ErrorCode: code,
-		//CName: *req.ReqBody.CName,
-		CRealm: req.ReqBody.Realm,
-		//SName:     *req.ReqBody.SName,
-		EData: make([]byte, 0),
+	return datamodel.KRB_ERROR{
+		Ctime:     datamodel.KerberosTimeFromUnix(ctime.Unix()).ToWire(),
+		Cusec:     datamodel.Microseconds(ctime.Nanosecond() / 1000),
+		Error_code: datamodel.Int32(code),
+		//Cname: *req.Req_body.Cname,
+		Crealm: req.Req_body.Realm,
+		//Sname:     *req.Req_body.Sname,
+		E_data: make([]byte, 0),
 	}
 }
 
-func (a *authenticationServer) checkEtypes(etypes []int32) bool {
+func (a *authenticationServer) checkEtypes(etypes []datamodel.Int32) bool {
 	for _, requested := range etypes {
 		if isSupportedEtype(a.crypto, requested) {
 			return true
@@ -188,13 +191,13 @@ func (a *authenticationServer) checkEtypes(etypes []int32) bool {
 	return false
 }
 
-func (a *authenticationServer) getSupportedKey(algo []int32, clientKeys []datamodel.EncryptionKey) (bool, datamodel.EncryptionKey) {
+func (a *authenticationServer) getSupportedKey(algo []datamodel.Int32, clientKeys []datamodel.EncryptionKey) (bool, datamodel.EncryptionKey) {
 	for _, requested := range algo {
 		if !isSupportedEtype(a.crypto, requested) {
 			continue
 		}
 		for _, key := range clientKeys {
-			if key.KeyType == requested {
+			if key.Keytype == requested {
 				return true, key
 			}
 		}
@@ -202,7 +205,7 @@ func (a *authenticationServer) getSupportedKey(algo []int32, clientKeys []datamo
 	return false, datamodel.EncryptionKey{}
 }
 
-func (a *authenticationServer) selectSessionKeyAlgo(algo []int32) crypto.Algorithm {
+func (a *authenticationServer) selectSessionKeyAlgo(algo []datamodel.Int32) crypto.Algorithm {
 	for _, requested := range algo {
 		if isSupportedEtype(a.crypto, requested) {
 			return a.crypto.Create(requested)
@@ -211,7 +214,7 @@ func (a *authenticationServer) selectSessionKeyAlgo(algo []int32) crypto.Algorit
 	panic("not found supported algorithm")
 }
 
-func isSupportedEtype(factory crypto.EncryptionFactory, requested int32) bool {
+func isSupportedEtype(factory crypto.EncryptionFactory, requested datamodel.Int32) bool {
 	for _, supported := range factory.SupportedETypes() {
 		if supported == requested {
 			return true
@@ -220,44 +223,44 @@ func isSupportedEtype(factory crypto.EncryptionFactory, requested int32) bool {
 	return false
 }
 
-func algorithmNotFoundError(req datamodel.AsReq) datamodel.KrbError {
+func algorithmNotFoundError(req datamodel.AS_REQ) datamodel.KRB_ERROR {
 	now := time.Now()
-	return datamodel.KrbError{
-		CTime:     datamodel.KerberosTime{now.Unix()},
-		CUSec:     int32(now.Nanosecond() / 1000),
-		ErrorCode: datamodel.KDC_ERR_ETYPE_NOSUPP,
-		CRealm:    req.ReqBody.Realm,
-		SName:     *req.ReqBody.SName,
-		EText:     "Neither of requested encryption types is supported",
+	return datamodel.KRB_ERROR{
+		Ctime:     datamodel.KerberosTimeNow().ToWire(),
+		Cusec:     datamodel.Microseconds(now.Nanosecond() / 1000),
+		Error_code: datamodel.KDC_ERR_ETYPE_NOSUPP,
+		Crealm:    req.Req_body.Realm,
+		Sname:     req.Req_body.Sname,
+		E_text:     "Neither of requested encryption types is supported",
 	}
 }
 
-func (a *authenticationServer) getStarttime(req datamodel.AsReq) (err datamodel.KrbError, t datamodel.KerberosTime, invalid bool) {
+func (a *authenticationServer) getStarttime(req datamodel.AS_REQ) (err datamodel.KRB_ERROR, t datamodel.KerberosTime, invalid bool) {
 	now, _ := kerberosNow()
-	if req.ReqBody.From == nil {
+	if datamodel.KerberosTime(req.Req_body.From).IsEmpty() {
 		return noError(), now, false
 	}
-	difference := req.ReqBody.From.Timestamp - time.Now().Unix() // -past, +future
+	difference := req.Req_body.From.Unix() - time.Now().Unix() // -past, +future
 	if difference < 0 {
 		return noError(), now, false
 	}
-	postdated := req.ReqBody.KdcOptions[datamodel.KDC_FLAG_POSTDATED]
+	postdated := datamodel.KDCOptions(req.Req_body.Kdc_options).Get(datamodel.KDC_FLAG_POSTDATED)
 	if postdated && difference < a.clockSkew {
 		return noError(), now, false
 	}
 	if !postdated && difference > a.clockSkew {
 		err := newAsError(req)
-		err.ErrorCode = datamodel.KDC_ERR_CANNOT_POSTDATE
+		err.Error_code = datamodel.KDC_ERR_CANNOT_POSTDATE
 		return err, datamodel.KerberosTime{}, false
 	}
 	// check against policy
 	if postdated && difference > a.maxPostdate {
 		err := newAsError(req)
-		err.ErrorCode = datamodel.KDC_ERR_CANNOT_POSTDATE
+		err.Error_code = datamodel.KDC_ERR_CANNOT_POSTDATE
 		return err, datamodel.KerberosTime{}, false
 	}
 	// postdated ticket beyond clock skew clock skew or non-postdated within clock skew
-	return noError(), *req.ReqBody.From, true
+	return noError(), datamodel.KerberosTime(req.Req_body.From), true
 
 }
 
@@ -268,64 +271,64 @@ func getTgtExpirationTime(
 	requestedTill datamodel.KerberosTime) datamodel.KerberosTime {
 
 	if requestedTill == datamodel.KerberosEpoch() {
-		requestedTill.Timestamp = math.MaxInt64
+		requestedTill.SetTimestamp(math.MaxInt64)
 	}
 	maxExpiration := min64(princExpirationTime, realmExpirationTime)
-	enforced := min64(requestedTill.Timestamp, startTime.Timestamp+maxExpiration)
-	return datamodel.KerberosTime{Timestamp: enforced}
+	enforced := min64(requestedTill.ToUnix(), startTime.ToUnix()+maxExpiration)
+	return datamodel.KerberosTimeFromUnix(enforced)
 }
 
 // TODO
-func (a *authenticationServer) preauthCheck(req datamodel.AsReq) (ok bool, err datamodel.KrbError) {
+func (a *authenticationServer) preauthCheck(req datamodel.AS_REQ) (ok bool, err datamodel.KRB_ERROR) {
 	return true, noError()
 }
 
-func newAsError(req datamodel.AsReq) datamodel.KrbError {
-	return newKdcError(datamodel.KdcReq(req))
+func newAsError(req datamodel.AS_REQ) datamodel.KRB_ERROR {
+	return newKdcError(datamodel.KDC_REQ(req))
 }
 
-func newTgsError(req datamodel.TgsReq) datamodel.KrbError {
-	return newKdcError(datamodel.KdcReq(req))
+func newTgsError(req datamodel.TGS_REQ) datamodel.KRB_ERROR {
+	return newKdcError(datamodel.KDC_REQ(req))
 }
 
-func newKdcError(req datamodel.KdcReq) datamodel.KrbError {
-	ctime, usec := kerberosNow()
-	err := datamodel.KrbError{
-		CTime: ctime,
-		CUSec: usec,
-		//ErrorCode: ,
-		CRealm: req.ReqBody.Realm,
-		//EText:     ,
+func newKdcError(req datamodel.KDC_REQ) datamodel.KRB_ERROR {
+	Ctime, usec := kerberosNow()
+	err := datamodel.KRB_ERROR{
+		Ctime: Ctime.ToWire(),
+		Cusec: datamodel.Microseconds(usec),
+		//Error_code: ,
+		Crealm: req.Req_body.Realm,
+		//E_text:     ,
 		//EData:     make([]byte, 0),
 	}
-	if req.ReqBody.SName != nil {
-		err.SName = *req.ReqBody.SName
+	if req.Req_body.Sname.IsEmpty() {
+		err.Sname = req.Req_body.Sname
 	}
 	return err
 }
 
-func (a *authenticationServer) checkMinLifetime(req datamodel.KdcReq, startTime datamodel.KerberosTime, expirationTime datamodel.KerberosTime) (bool, datamodel.KrbError) {
-	if expirationTime.Timestamp-startTime.Timestamp < a.minTicketLifetime {
+func (a *authenticationServer) checkMinLifetime(req datamodel.KDC_REQ, startTime datamodel.KerberosTime, expirationTime datamodel.KerberosTime) (bool, datamodel.KRB_ERROR) {
+	if expirationTime.ToUnix() - startTime.ToUnix() < a.minTicketLifetime {
 		err := newKdcError(req)
-		err.ErrorCode = datamodel.KDC_ERR_NEVER_VALID
+		err.Error_code = datamodel.KDC_ERR_NEVER_VALID
 		return false, err
 	} else {
 		return true, noError()
 	}
 }
 
-func (a *authenticationServer) calcNextRenewTill(sprinc database.PrincipalInfo, cprinc database.PrincipalInfo, rtime *datamodel.KerberosTime) datamodel.KerberosTime {
+func (a *authenticationServer) calcNextRenewTill(sprinc database.PrincipalInfo, cprinc database.PrincipalInfo, rtime datamodel.KerberosTime) datamodel.KerberosTime {
 	maxRenewTime := min64(min64(sprinc.MaxRenewTime, cprinc.MaxRenewTime), a.maxRenewTime)
-	if rtime != nil {
-		maxRenewTime = min64(maxRenewTime, rtime.Timestamp)
+	if rtime.IsEmpty() {
+		maxRenewTime = min64(maxRenewTime, rtime.ToUnix())
 	}
-	return datamodel.KerberosTime{maxRenewTime}
+	return datamodel.KerberosTimeFromUnix(maxRenewTime)
 }
 
 func (a *authenticationServer) encryptTicketPart(keys []datamodel.EncryptionKey, ticket datamodel.EncTicketPart) datamodel.EncryptedData {
 	// TODO picking logic
 	key := keys[0]
-	algo := a.crypto.Create(key.KeyType)
+	algo := a.crypto.Create(datamodel.Int32(key.Keytype))
 	err, data := algo.Encrypt(key, ticket)
 	if err != nil {
 		panic(err) // TODO should never happen
@@ -333,8 +336,8 @@ func (a *authenticationServer) encryptTicketPart(keys []datamodel.EncryptionKey,
 	return data
 }
 
-func (a *authenticationServer) encryptAsRepPart(key datamodel.EncryptionKey, encAsRep datamodel.EncAsRepPart) datamodel.EncryptedData {
-	algo := a.crypto.Create(key.KeyType)
+func (a *authenticationServer) encryptAsRepPart(key datamodel.EncryptionKey, encAsRep datamodel.EncASRepPart) datamodel.EncryptedData {
+	algo := a.crypto.Create(datamodel.Int32(key.Keytype))
 	err, data := algo.Encrypt(key, encAsRep)
 	if err != nil {
 		panic(err) // TODO should never happen
@@ -359,31 +362,31 @@ func max64(a, b int64) int64 {
 }
 
 
-func noError() datamodel.KrbError {
-	return datamodel.KrbError{}
+func noError() datamodel.KRB_ERROR {
+	return datamodel.KRB_ERROR{}
 }
 
-func noRep() datamodel.AsRep {
-	return datamodel.AsRep{}
+func noRep() datamodel.AS_REP {
+	return datamodel.AS_REP{}
 }
 
 func kerberosNow() (t datamodel.KerberosTime, usec int32) {
 	return datamodel.KerberosTimeNowUsec()
 }
 
-func keyExpirationFromLastReq(lastReq datamodel.LastReq) *datamodel.KerberosTime {
-	minElem := datamodel.KerberosTime{math.MaxInt64}
+func keyExpirationFromLastReq(lastReq datamodel.LastReq) datamodel.KerberosTime {
+	minElem := datamodel.KerberosTimeFromUnix(math.MaxInt64)
 	for _, elem := range lastReq {
-		if elem.LrType == datamodel.LR_TYPE_PASSWORD_EXPIRES || elem.LrType == datamodel.LR_TYPE_ACCOUNT_EXPIRES {
-			if elem.LrValue.Timestamp < minElem.Timestamp {
-				minElem.Timestamp = elem.LrValue.Timestamp
+		if elem.Lr_type == datamodel.LR_TYPE_PASSWORD_EXPIRES || elem.Lr_type == datamodel.LR_TYPE_ACCOUNT_EXPIRES {
+			if datamodel.KerberosTime(elem.Lr_value).ToUnix() < datamodel.KerberosTime(minElem).ToUnix() {
+				minElem.SetTimestamp(datamodel.KerberosTime(elem.Lr_value).ToUnix())
 			}
 		}
 	}
-	if minElem.Timestamp == math.MaxInt64 {
-		return nil
+	if minElem.ToUnix() == math.MaxInt64 {
+		return datamodel.KerberosTime{}
 	} else {
-		return &minElem
+		return minElem
 	}
 }
 
@@ -398,19 +401,19 @@ func keyExpirationFromLastReq(lastReq datamodel.LastReq) *datamodel.KerberosTime
 //starttime can be rendered permanently invalid (through a hot-list
 //mechanism) (see Section 3.3.3.1).
 
-func (a *authenticationServer) TgsExchange(req datamodel.TgsReq) (ok bool, kerr datamodel.KrbError, rep datamodel.TgsRep) {
-	if req.ReqBody.Realm != a.realm {
+func (a *authenticationServer) TgsExchange(req datamodel.TGS_REQ) (ok bool, kerr datamodel.KRB_ERROR, rep datamodel.TGS_REP) {
+	if req.Req_body.Realm != a.realm {
 		// appr cross-realm key MUST be used
 		return false, datamodel.NewErrorGeneric(a.realm, datamodel.PrincipalName{}, "Cross-realm auth not implemented"), noTgsRep()
 	}
 	// initial integrity verification
-	if req.ReqBody.SName == nil {
+	if req.Req_body.Sname.IsEmpty() {
 		err := newTgsError(req)
-		err.ErrorCode = datamodel.KRB_ERR_GENERIC // TODO
-		err.EText = "sname missing in request body"
+		err.Error_code = datamodel.KRB_ERR_GENERIC // TODO
+		err.E_text = "Sname missing in request body"
 		return false, err, noTgsRep()
 	}
-	sname := *req.ReqBody.SName
+	sname := req.Req_body.Sname
 
 	// get principal info from database
 	serverPrinc, ok := a.database.GetPrincipal(sname)
@@ -418,17 +421,17 @@ func (a *authenticationServer) TgsExchange(req datamodel.TgsReq) (ok bool, kerr 
 		return false, newTgsErrorFromReq(req, datamodel.KDC_ERR_S_PRINCIPAL_UNKNOWN), noTgsRep()
 	}
 
-	apReq, err := getApReqFromTgsReq(req)
+	apReq, err := a.getApReqFromTgsReq(req)
 	ticket := apReq.Ticket
 	if err != nil {
 		return false, newTgsErrorFromReq(req, datamodel.KDC_ERR_PADATA_TYPE_NOSUPP), noTgsRep()
 	}
 	notTgt := true // TODO implement detection, used only in condition below
-	kdcFlags := req.ReqBody.KdcOptions
-	renewFlag := kdcFlags[datamodel.KDC_FLAG_RENEW]
-	validateFlag := kdcFlags[datamodel.KDC_FLAG_VALIDATE]
-	proxyFlag := kdcFlags[datamodel.KDC_FLAG_PROXY]
-	if notTgt && (renewFlag || validateFlag || proxyFlag) && ticket.SName.Equal(sname) {
+	kdcFlags := datamodel.KDCOptions(req.Req_body.Kdc_options)
+	renewFlag := kdcFlags.Get(datamodel.KDC_FLAG_RENEW)
+	validateFlag := kdcFlags.Get(datamodel.KDC_FLAG_VALIDATE)
+	proxyFlag := kdcFlags.Get(datamodel.KDC_FLAG_PROXY)
+	if notTgt && (renewFlag || validateFlag || proxyFlag) && ticket.Sname.Equal(sname) {
 		// TODO so what?
 	}
 	err, encTicket := decryptTicket(a.crypto, serverPrinc.SecretKeys, ticket)
@@ -442,7 +445,7 @@ func (a *authenticationServer) TgsExchange(req datamodel.TgsReq) (ok bool, kerr 
 		return false, newTgsErrorFromReq(req, datamodel.KRB_AP_ERR_BAD_INTEGRITY), noTgsRep()
 	}
 
-	errCode := verifyReqChecksum(a.crypto, currentSessionKey, encAuth.CKSum, req.ReqBody)
+	errCode := verifyReqChecksum(a.crypto, currentSessionKey, encAuth.Cksum, req.Req_body)
 	if errCode != datamodel.KDC_ERR_NONE {
 		return false, newTgsErrorFromReq(req, errCode), noTgsRep()
 	}
@@ -458,11 +461,11 @@ func (a *authenticationServer) TgsExchange(req datamodel.TgsReq) (ok bool, kerr 
 
 	// update lr info
 	authTime, _ := kerberosNow()
-	cname := encTicket.CName
-	a.database.UpdateLastReq(cname, datamodel.LR_TYPE_ANY, authTime)
-	a.database.UpdateLastReq(cname, datamodel.LR_TYPE_INITIAL_REQUEST, authTime)
+	Cname := encTicket.Cname
+	a.database.UpdateLastReq(Cname, datamodel.LR_TYPE_ANY, authTime)
+	a.database.UpdateLastReq(Cname, datamodel.LR_TYPE_INITIAL_REQUEST, authTime)
 	// retrieve updated lr info
-	clientPrinc, ok := a.database.GetPrincipal(cname)
+	clientPrinc, ok := a.database.GetPrincipal(Cname)
 	if !ok {
 		return false, newTgsErrorFromReq(req, datamodel.KDC_ERR_C_PRINCIPAL_UNKNOWN), noTgsRep()
 	}
@@ -471,119 +474,122 @@ func (a *authenticationServer) TgsExchange(req datamodel.TgsReq) (ok bool, kerr 
 
 	// set ticket flags
 	flags := datamodel.NewTicketFlags()
-	flags[datamodel.TKT_FLAG_MAY_POSTDATE] = kdcFlags[datamodel.KDC_FLAG_ALLOW_POSTDATE]
-	flags[datamodel.TKT_FLAG_POSTDATED] = kdcFlags[datamodel.KDC_FLAG_POSTDATED]
-	flags[datamodel.TKT_FLAG_RENEWABLE] = kdcFlags[datamodel.KDC_FLAG_RENEWABLE]
-	flags[datamodel.TKT_FLAG_INVALID] = invalid
-	flags[datamodel.TKT_FLAG_INITIAL] = true
+	flags.Set(datamodel.TKT_FLAG_MAY_POSTDATE, kdcFlags.Get(datamodel.KDC_FLAG_ALLOW_POSTDATE))
+	flags.Set(datamodel.TKT_FLAG_POSTDATED, kdcFlags.Get(datamodel.KDC_FLAG_POSTDATED))
+	flags.Set(datamodel.TKT_FLAG_RENEWABLE, kdcFlags.Get(datamodel.KDC_FLAG_RENEWABLE))
+	flags.Set(datamodel.TKT_FLAG_INVALID, invalid)
+	flags.Set(datamodel.TKT_FLAG_INITIAL, true)
 
-	ticketAddresses := encTicket.CAddr
+	ticketAddresses := encTicket.Caddr
 
-	tgtProxiable := encTicket.Flags[datamodel.TKT_FLAG_PROXIABLE]
-	tgtForwardable := encTicket.Flags[datamodel.TKT_FLAG_FORWARDABLE]
+	encTicketFlags := datamodel.TicketFlags(encTicket.Flags)
+	tgtProxiable := encTicketFlags.Get(datamodel.TKT_FLAG_PROXIABLE)
+	tgtForwardable := encTicketFlags.Get(datamodel.TKT_FLAG_FORWARDABLE)
 	if tgtProxiable || tgtForwardable {
 		// TODO The PROXY option will not be honored on
-		flags[datamodel.KDC_FLAG_FORWARDED] = tgtForwardable
-		flags[datamodel.KDC_FLAG_PROXY] = tgtProxiable
-		ticketAddresses = req.ReqBody.Addresses
+		flags.Set(datamodel.KDC_FLAG_FORWARDED, tgtForwardable)
+		flags.Set(datamodel.KDC_FLAG_PROXY, tgtProxiable)
+		ticketAddresses = req.Req_body.Addresses
 	}
 
 	// TODO support ENC-TKT-IN-SKEY
 
-	//TODO serverPrincIsTgs := sname.Equal(a.tgsPrinc)
+	//TODO serverPrincIsTgs := Sname.Equal(a.tgsPrinc)
 	// TODO check server is registered in the realm of the KDC
 	now, _ := datamodel.KerberosTimeNowUsec()
-	if kdcFlags[datamodel.KDC_FLAG_RENEW] {
+	if kdcFlags.Get(datamodel.KDC_FLAG_RENEW) {
 		validated :=
-			encTicket.Flags[datamodel.TKT_FLAG_RENEWABLE] &&
-				!encTicket.Flags[datamodel.TKT_FLAG_INVALID] &&
-				encTicket.RenewTill.Timestamp > now.Timestamp
+			encTicketFlags.Get(datamodel.TKT_FLAG_RENEWABLE) &&
+				!encTicketFlags.Get(datamodel.TKT_FLAG_INVALID) &&
+				datamodel.KerberosTime(encTicket.Renew_till).ToUnix() > now.ToUnix()
 		if !validated {
 			krbErr := datamodel.NewErrorC(a.realm, sname, datamodel.KRB_AP_ERR_TKT_EXPIRED)
 			return false, krbErr, noTgsRep()
 		}
 	}
-	if kdcFlags[datamodel.KDC_FLAG_VALIDATE] {
-		validated := (encTicket.Flags[datamodel.TKT_FLAG_INVALID] &&
-			encTicket.StartTime.Timestamp > now.Timestamp)
+	if kdcFlags.Get(datamodel.KDC_FLAG_VALIDATE) {
+		validated := (encTicketFlags.Get(datamodel.TKT_FLAG_INVALID) &&
+			datamodel.KerberosTime(encTicket.Starttime).ToUnix()> now.ToUnix())
 		if !validated {
 			krbErr := datamodel.NewErrorC(a.realm, sname, datamodel.KRB_AP_ERR_TKT_NYV)
 			return false, krbErr, noTgsRep()
 		}
 	}
-	if kdcFlags[datamodel.KDC_FLAG_PROXY] {
-		validated := encTicket.Flags[datamodel.TKT_FLAG_PROXIABLE]
+	if kdcFlags.Get(datamodel.KDC_FLAG_PROXY) {
+		validated := encTicketFlags.Get(datamodel.TKT_FLAG_PROXIABLE)
 		if !validated {
 			krbErr := datamodel.NewErrorC(a.realm, sname, datamodel.KDC_ERR_POLICY)
 			return false, krbErr, noTgsRep()
 		}
 	}
 
-	var renewTill *datamodel.KerberosTime
-	if encTicket.Flags[datamodel.KDC_FLAG_RENEWABLE] {
-		renewTill = encTicket.RenewTill
+	var renewTill datamodel.KerberosTime
+	if encTicketFlags.Get(datamodel.KDC_FLAG_RENEWABLE) {
+		renewTill = datamodel.KerberosTime(encTicket.Renew_till)
 	}
-	if a.revocationHotlist.IsRevoked(encTicket.AuthTime) {
+	if a.revocationHotlist.IsRevoked(datamodel.KerberosTime(encTicket.Authtime)) {
 		return false, newTgsErrorFromReq(req, datamodel.KDC_ERR_TGT_REVOKED), noTgsRep()
 	}
 
-	oldStartTime := encTicket.AuthTime
-	if encTicket.StartTime != nil {
-		oldStartTime = *encTicket.StartTime
+	oldStartTime := encTicket.Authtime
+	if !encTicket.Starttime.IsZero() {
+		oldStartTime = encTicket.Starttime
 	}
 	var appMaxLifetime int64 = math.MaxInt64
 	expirationTime := getTicketExpirationTime(
-		req.ReqBody.Till, encTicket.EndTime, startTime, appMaxLifetime, a.maxExpirationTime,
-		encTicket.RenewTill, oldStartTime) // TODO check KDC_FLAG_RENEW
+		datamodel.KerberosTime(req.Req_body.Till),
+		datamodel.KerberosTime(encTicket.Endtime), startTime, appMaxLifetime, a.maxExpirationTime,
+		datamodel.KerberosTime(encTicket.Renew_till),
+		datamodel.KerberosTime(oldStartTime)) // TODO check KDC_FLAG_RENEW
 
-	if ok, err := a.checkMinLifetime(datamodel.KdcReq(req), startTime, expirationTime); !ok {
+	if ok, err := a.checkMinLifetime(datamodel.KDC_REQ(req), startTime, expirationTime); !ok {
 		return false, err, noTgsRep()
 	}
 
 	effectiveSessionKey := currentSessionKey
-	if encAuth.SubKey != nil {
-		effectiveSessionKey = *encAuth.SubKey
+	if encAuth.Subkey.IsEmpty() {
+		effectiveSessionKey = encAuth.Subkey
 	}
 
 	// fill ticket info
 	encRepTicket := datamodel.EncTicketPart{
-		Flags:             flags,
+		Flags:             flags.ToWire(),
 		Key:               effectiveSessionKey,
-		CRealm:            encTicket.CRealm,
-		CName:             encTicket.CName,
+		Crealm:            encTicket.Crealm,
+		Cname:             encTicket.Cname,
 		Transited:         encTicket.Transited, // TODO implement KDC_ERR_TRTYPE_NOSUPP
-		AuthTime:          encTicket.AuthTime,
-		StartTime:         &startTime,
-		EndTime:           encTicket.EndTime,
-		RenewTill:         renewTill,
-		CAddr:             ticketAddresses,
-		AuthorizationData: encTicket.AuthorizationData,
+		Authtime:          encTicket.Authtime,
+		Starttime:         startTime.ToWire(),
+		Endtime:           encTicket.Endtime,
+		Renew_till:        renewTill.ToWire(),
+		Caddr:             ticketAddresses,
+		Authorization_data: encTicket.Authorization_data,
 	}
 	repTicket := datamodel.Ticket{
 		Realm:   a.realm,
-		SName:   sname,
-		EncPart: a.encryptTicketPart(serverPrinc.SecretKeys, encRepTicket),
+		Sname:   sname,
+		Enc_part: a.encryptTicketPart(serverPrinc.SecretKeys, encRepTicket),
 	}
-	encAsRep := datamodel.EncAsRepPart{
+	encAsRep := datamodel.EncASRepPart{
 		Key:           effectiveSessionKey,
-		LastReq:       clientPrinc.LastReq,
-		Nonce:         req.ReqBody.Nonce,
-		KeyExpiration: nil,
-		Flags:         flags,
-		AuthTime:      authTime,
-		StartTime:     &startTime,
-		EndTime:       expirationTime,
-		RenewTill:     renewTill,
-		SRealm:        a.realm,
-		SName:         sname,
-		CAddr:         req.ReqBody.Addresses,
+		Last_req:       clientPrinc.LastReq,
+		Nonce:         req.Req_body.Nonce,
+		//Key_expiration: nil,
+		Flags:         flags.ToWire(),
+		Authtime:      authTime.ToWire(),
+		Starttime:     startTime.ToWire(),
+		Endtime:       expirationTime.ToWire(),
+		Renew_till:     renewTill.ToWire(),
+		Srealm:        a.realm,
+		Sname:         sname,
+		Caddr:         req.Req_body.Addresses,
 	}
-	rep = datamodel.TgsRep{
-		PaData:  make([]datamodel.PaData, 0), // TODO
-		CRealm:  req.ReqBody.Realm,
-		CName:   cname,
+	rep = datamodel.TGS_REP{
+		Padata:  make([]datamodel.PA_DATA, 0), // TODO
+		Crealm:  req.Req_body.Realm,
+		Cname:   Cname,
 		Ticket:  repTicket,
-		EncPart: a.encryptAsRepPart(effectiveSessionKey, encAsRep),
+		Enc_part: a.encryptAsRepPart(effectiveSessionKey, encAsRep),
 	}
 
 	return true, datamodel.NoError(), rep
@@ -591,55 +597,57 @@ func (a *authenticationServer) TgsExchange(req datamodel.TgsReq) (ok bool, kerr 
 
 func getTicketExpirationTime(requestedTill datamodel.KerberosTime, oldEndTime datamodel.KerberosTime,
 	startTime datamodel.KerberosTime, appMaxLifetime int64, realmMaxExpirationTime int64,
-	oldRenewTill *datamodel.KerberosTime, oldStartTime datamodel.KerberosTime) datamodel.KerberosTime {
+	oldRenewTill datamodel.KerberosTime, oldStartTime datamodel.KerberosTime) datamodel.KerberosTime {
 
 	if requestedTill == datamodel.KerberosEpoch() {
-		requestedTill.Timestamp = math.MaxInt64
+		requestedTill.SetTimestamp(math.MaxInt64)
 	}
-	calculatedEndTime := startTime.Timestamp + min64(appMaxLifetime, realmMaxExpirationTime)
-	endtime := min64(requestedTill.Timestamp, min64(oldEndTime.Timestamp, calculatedEndTime))
+	calculatedEndTime := startTime.ToUnix() + min64(appMaxLifetime, realmMaxExpirationTime)
+	endtime := min64(requestedTill.ToUnix(), min64(oldEndTime.ToUnix(), calculatedEndTime))
 
-	if oldRenewTill != nil {
-		oldLifetime := oldEndTime.Timestamp - oldStartTime.Timestamp
-		endtime = min64(oldRenewTill.Timestamp, oldStartTime.Timestamp+oldLifetime)
+	if !oldRenewTill.IsEmpty() {
+		oldLifetime := oldEndTime.ToUnix() - oldStartTime.ToUnix()
+		endtime = min64(oldRenewTill.ToUnix(), oldStartTime.ToUnix() +oldLifetime)
 	}
-	return datamodel.KerberosTime{endtime}
+	return datamodel.KerberosTimeFromUnix(endtime)
 }
 
-func (a *authenticationServer) getTgsStarttime(req datamodel.TgsReq, encTicket datamodel.EncTicketPart) (err datamodel.KrbError, t datamodel.KerberosTime, invalid bool) {
+func (a *authenticationServer) getTgsStarttime(req datamodel.TGS_REQ, encTicket datamodel.EncTicketPart) (err datamodel.KRB_ERROR, t datamodel.KerberosTime, invalid bool) {
 	now, _ := kerberosNow()
-	if req.ReqBody.From == nil {
+	if req.Req_body.From.IsZero() {
 		return noError(), now, false
 	}
-	difference := req.ReqBody.From.Timestamp - time.Now().Unix() // -past, +future
+	difference := req.Req_body.From.Unix() - time.Now().Unix() // -past, +future
 	if difference < 0 {
 		return noError(), now, false
 	}
-	postdate := req.ReqBody.KdcOptions[datamodel.KDC_FLAG_ALLOW_POSTDATE]
-	postdated := req.ReqBody.KdcOptions[datamodel.KDC_FLAG_POSTDATED]
-	mayPostdate := encTicket.Flags[datamodel.TKT_FLAG_MAY_POSTDATE]
+	kdcOptions := datamodel.KDCOptions(req.Req_body.Kdc_options)
+	encTicketFlags := datamodel.TicketFlags(encTicket.Flags)
+	postdate := kdcOptions.Get(datamodel.KDC_FLAG_ALLOW_POSTDATE)
+	postdated := kdcOptions.Get(datamodel.KDC_FLAG_POSTDATED)
+	mayPostdate := encTicketFlags.Get(datamodel.TKT_FLAG_MAY_POSTDATE)
 	if !postdate && difference < a.clockSkew {
 		return noError(), now, false
 	}
 	if (!postdated || !mayPostdate) && difference > a.clockSkew {
 		err := newTgsError(req)
-		err.ErrorCode = datamodel.KDC_ERR_CANNOT_POSTDATE
+		err.Error_code = datamodel.KDC_ERR_CANNOT_POSTDATE
 		return err, datamodel.KerberosTime{}, false
 	}
 	// check against policy
 	if difference > a.maxPostdate {
 		err := newTgsError(req)
-		err.ErrorCode = datamodel.KDC_ERR_CANNOT_POSTDATE
+		err.Error_code = datamodel.KDC_ERR_CANNOT_POSTDATE
 		return err, datamodel.KerberosTime{}, false
 	}
 	// postdated ticket beyond clock skew clock skew or non-postdated within clock skew
-	return noError(), *req.ReqBody.From, true
+	return noError(), datamodel.KerberosTime(req.Req_body.From), true
 }
 
-func verifyReqChecksum(cryptof crypto.ChecksumFactory, key datamodel.EncryptionKey, clientCksum *datamodel.Checksum, reqBody datamodel.KdcReqBody) int32 {
+func verifyReqChecksum(cryptof crypto.ChecksumFactory, key datamodel.EncryptionKey, clientCksum datamodel.Checksum, reqBody datamodel.KDC_REQ_BODY) int32 {
 	// TODO check collision proof => KRB_AP_ERR_INAPP_CKSUM
 	// TODO check supported => KDC_ERR_SUMTYPE_NOSUPP
-	algo := cryptof.CreateChecksum(clientCksum.CkSumType)
+	algo := cryptof.CreateChecksum(clientCksum.Cksumtype)
 	mic := crypto.MIC(clientCksum.Checksum)
 	body := make([]byte, 0) // TODO serialization
 	if !algo.VerifyMic(key, body, mic) {
@@ -648,11 +656,14 @@ func verifyReqChecksum(cryptof crypto.ChecksumFactory, key datamodel.EncryptionK
 	return datamodel.KDC_ERR_NONE
 }
 
-func getApReqFromTgsReq(req datamodel.TgsReq) (apReq datamodel.ApReq, err error) {
+func (srv authenticationServer) getApReqFromTgsReq(req datamodel.TGS_REQ) (apReq datamodel.AP_REQ, err error) {
 	found := false
-	for _, padata := range req.PaData {
-		if padata.Value.PaType() == datamodel.PA_TGS_REQ {
-			apReq = datamodel.ApReq(padata.Value.(datamodel.PaTgsReq))
+	for _, padata := range req.Padata {
+		if padata.Padata_type == datamodel.PA_T_TGS_REQ {
+			err = srv.serializer.Unmarshal(padata.Padata_value, &apReq)
+			if err != nil {
+				return
+			}
 			found = true
 			break
 		}
@@ -666,17 +677,17 @@ func getApReqFromTgsReq(req datamodel.TgsReq) (apReq datamodel.ApReq, err error)
 func decryptTicket(crypto crypto.EncryptionFactory, keys []datamodel.EncryptionKey, tgt datamodel.Ticket) (err error, res datamodel.EncTicketPart) {
 	// TODO picking ticket
 	key := keys[0]
-	algo := crypto.Create(key.KeyType)
-	err = algo.Decrypt(tgt.EncPart, key, &res)
+	algo := crypto.Create(key.Keytype)
+	err = algo.Decrypt(tgt.Enc_part, key, &res)
 	return err, res
 }
 
 func decryptAuth(crypto crypto.EncryptionFactory, key datamodel.EncryptionKey, data datamodel.EncryptedData) (err error, res datamodel.Authenticator) {
-	algo := crypto.Create(key.KeyType)
+	algo := crypto.Create(key.Keytype)
 	err = algo.Decrypt(data, key, &res)
 	return err, res
 }
 
-func noTgsRep() datamodel.TgsRep {
-	return datamodel.TgsRep{}
+func noTgsRep() datamodel.TGS_REP {
+	return datamodel.TGS_REP{}
 }

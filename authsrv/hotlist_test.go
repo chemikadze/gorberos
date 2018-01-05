@@ -80,6 +80,23 @@ func TestHotlistRevocationExpiration(t *testing.T) {
 	}
 }
 
+func TestRevocation_Merge(t *testing.T) {
+	now := datamodel.KerberosTimeNow()
+	t1 := now.Minus(60)
+	t2 := now.Minus(30)
+	r1 := revocation{t1, t2}
+
+	x1 := now.Minus(45)
+	x2 := now.Minus(15)
+	r2 := revocation{x1, x2}
+
+	merged := r1.Merge(r2)
+	expectedMerge := revocation{t1, x2}
+	if !merged.Equal(expectedMerge) {
+		t.Errorf("Expected proper merge %v, found %v", expectedMerge, merged)
+	}
+}
+
 func TestHotlistIntersectingRevocationMerge(t *testing.T) {
 	r := createRevocation()
 	now := datamodel.KerberosTimeNow()
@@ -93,7 +110,7 @@ func TestHotlistIntersectingRevocationMerge(t *testing.T) {
 		t.Errorf("Two revocations should merge to one, found %v instead", r.revocations)
 	}
 	expectedMerge := revocation{t1, x2}
-	if r.revocations[0] != expectedMerge {
+	if !r.revocations[0].Equal(expectedMerge) {
 		t.Errorf("Expected proper merge %v, found %v", expectedMerge, r.revocations[0])
 	}
 }

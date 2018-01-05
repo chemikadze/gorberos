@@ -4,3 +4,7 @@ go:
   - 1.5
   - 1.6
   - tip
+
+before_install:
+  - make deps
+  - make generate

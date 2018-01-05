@@ -26,19 +26,19 @@ func NewMockEncFactory() crypto.Factory {
 	return newMockEncFactory()
 }
 
-func (f mockEncFactory) Create(etype int32) crypto.Algorithm {
+func (f mockEncFactory) Create(etype datamodel.Int32) crypto.Algorithm {
 	return f.algo
 }
 
-func (mockEncFactory) SupportedETypes() []int32 {
-	return []int32{42}
+func (mockEncFactory) SupportedETypes() []datamodel.Int32 {
+	return []datamodel.Int32{42}
 }
 
-func (mockEncFactory) CreateChecksum(cktype int32) crypto.ChecksumAlgorithm {
+func (mockEncFactory) CreateChecksum(cktype datamodel.Int32) crypto.ChecksumAlgorithm {
 	return mockCksum{}
 }
 
-func (mockEncFactory) ChecksumTypeForEncryption(etype int32) (cktype int32) {
+func (mockEncFactory) ChecksumTypeForEncryption(etype datamodel.Int32) (cktype datamodel.Int32) {
 	return etype
 }
 
@@ -67,17 +67,17 @@ func newMockAlgo() mockAlgo {
 	return mockAlgo{}
 }
 
-func (a mockAlgo) EType() int32 {
+func (a mockAlgo) EType() datamodel.Int32 {
 	return 42
 }
 
 func (a mockAlgo) GenerateKey() datamodel.EncryptionKey {
-	return datamodel.EncryptionKey{KeyType: a.EType(), KeyValue: make([]byte, 0)}
+	return datamodel.EncryptionKey{Keytype: a.EType(), Keyvalue: make([]byte, 0)}
 }
 
 func (a *mockAlgo) Encrypt(key datamodel.EncryptionKey, input interface{}) (error, datamodel.EncryptedData) {
 	encrypted := datamodel.EncryptedData{}
-	encrypted.EType = a.EType()
+	encrypted.Etype = a.EType()
 	encrypted.Cipher = make([]byte, 1)
 	encrypted.Cipher[0] = byte(len(a.state))
 	pair := encryptionMapping{encrypted, input}
@@ -86,8 +86,8 @@ func (a *mockAlgo) Encrypt(key datamodel.EncryptionKey, input interface{}) (erro
 }
 
 func (a mockAlgo) Decrypt(input datamodel.EncryptedData, key datamodel.EncryptionKey, result interface{}) error {
-	if input.EType != a.EType() {
-		msg := fmt.Sprintf("Unsupported etype %v for algorithm %v\n\nInput: %v", input.EType, a.EType(), input)
+	if input.Etype != a.EType() {
+		msg := fmt.Sprintf("Unsupported etype %v for algorithm %v\n\nInput: %v", input.Etype, a.EType(), input)
 		panic(msg)
 		return errors.New(msg)
 	}
@@ -115,20 +115,20 @@ func (a mockAlgo) Decrypt(input datamodel.EncryptedData, key datamodel.Encryptio
 
 // mock transport
 type MockTransport struct {
-	OnSendAsReq  func(t *MockTransport, req datamodel.AsReq) (error, datamodel.AsRep)
-	OnSendApReq  func(t *MockTransport, req datamodel.ApReq) (error, datamodel.ApRep)
-	OnSendTgsReq func(t *MockTransport, req datamodel.TgsReq) (error, datamodel.TgsRep)
+	OnSendAsReq  func(t *MockTransport, req datamodel.AS_REQ) (error, datamodel.AS_REP)
+	OnSendApReq  func(t *MockTransport, req datamodel.AP_REQ) (error, datamodel.AP_REP)
+	OnSendTgsReq func(t *MockTransport, req datamodel.TGS_REQ) (error, datamodel.TGS_REP)
 }
 
-func (t *MockTransport) SendAsReq(req datamodel.AsReq) (error, datamodel.AsRep) {
+func (t *MockTransport) SendAsReq(req datamodel.AS_REQ) (error, datamodel.AS_REP) {
 	return t.OnSendAsReq(t, req)
 }
 
-func (t *MockTransport) SendApReq(req datamodel.ApReq) (error, datamodel.ApRep) {
+func (t *MockTransport) SendApReq(req datamodel.AP_REQ) (error, datamodel.AP_REP) {
 	return t.OnSendApReq(t, req)
 }
 
-func (t *MockTransport) SendTgsReq(req datamodel.TgsReq) (error, datamodel.TgsRep) {
+func (t *MockTransport) SendTgsReq(req datamodel.TGS_REQ) (error, datamodel.TGS_REP) {
 	return t.OnSendTgsReq(t, req)
 }
 
@@ -163,14 +163,14 @@ func (db *mockPrincipalDatabase) UpdateLastReq(princName datamodel.PrincipalName
 		return errors.New(fmt.Sprintf("Principal %v not found in database", princName.String()))
 	}
 	for i, req := range princ.LastReq {
-		if req.LrType == lrType {
-			req.LrValue = time
+		if req.Lr_type == datamodel.Int32(lrType) {
+			req.Lr_value = time.ToWire()
 			princ.LastReq[i] = req
 			return nil
 		}
 	}
 	// last req not found
-	princ.LastReq = append(princ.LastReq, datamodel.LastReqElement{lrType, time})
+	princ.LastReq = append(princ.LastReq, datamodel.LastReq{{datamodel.Int32(lrType), time.ToWire()}}[0])
 	db.principals[princName.String()] = princ
 	return nil
 }
@@ -198,7 +198,7 @@ func newNoopTransport(server authsrv.KdcServer) gorberos.ClientTransport {
 	return &noopTransport{server}
 }
 
-func (t *noopTransport) SendAsReq(r datamodel.AsReq) (error, datamodel.AsRep) {
+func (t *noopTransport) SendAsReq(r datamodel.AS_REQ) (error, datamodel.AS_REP) {
 	ok, err, rep := t.server.AuthenticationServerExchange(r)
 	if !ok {
 		return err, rep
@@ -207,11 +207,11 @@ func (t *noopTransport) SendAsReq(r datamodel.AsReq) (error, datamodel.AsRep) {
 	}
 }
 
-func (t *noopTransport) SendApReq(datamodel.ApReq) (error, datamodel.ApRep) {
-	return errors.New("not supported by KDC"), datamodel.ApRep{}
+func (t *noopTransport) SendApReq(datamodel.AP_REQ) (error, datamodel.AP_REP) {
+	return errors.New("not supported by KDC"), datamodel.AP_REP{}
 }
 
-func (t *noopTransport) SendTgsReq(req datamodel.TgsReq) (error, datamodel.TgsRep) {
+func (t *noopTransport) SendTgsReq(req datamodel.TGS_REQ) (error, datamodel.TGS_REP) {
 	ok, err, rep := t.server.TgsExchange(req)
 	if !ok {
 		return err, rep

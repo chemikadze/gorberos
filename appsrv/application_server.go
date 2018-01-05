@@ -6,7 +6,7 @@ import (
 )
 
 type ApplicationServer interface {
-	ApplicationServerExchange(datamodel.ApReq) (ok bool, err datamodel.KrbError, rep datamodel.ApReq)
+	ApplicationServerExchange(datamodel.AP_REQ) (ok bool, err datamodel.KRB_ERROR, rep datamodel.AP_REP)
 }
 
 type applicationServer struct {
@@ -17,27 +17,28 @@ type applicationServer struct {
 	realmKeys    map[datamodel.Realm]datamodel.EncryptionKey
 	tgts         map[datamodel.Realm]datamodel.Ticket
 	tgtKeys      map[datamodel.Realm]datamodel.EncryptionKey
-	recvSeqNo    *uint32
-	sendSeqNo    *uint32
+	recvSeqNo    *datamodel.UInt32
+	sendSeqNo    datamodel.UInt32
 	subKey       *datamodel.EncryptionKey
 	seqNoEnabled bool
 }
 
-func (a *applicationServer) ApplicationServerExchange(req datamodel.ApReq) (ok bool, kerr datamodel.KrbError, krep datamodel.ApRep) {
-	if req.MsgType != datamodel.MSG_TYPE_KRB_AP_REQ {
+func (a *applicationServer) ApplicationServerExchange(req datamodel.AP_REQ) (ok bool, kerr datamodel.KRB_ERROR, krep datamodel.AP_REP) {
+	if req.Msg_type != datamodel.MSG_TYPE_KRB_AP_REQ {
 		return false, datamodel.NewErrorC(a.defaultRealm, a.principal, datamodel.KRB_AP_ERR_MSG_TYPE), noRep()
 	}
-	if req.Ticket.VNo < 5 {
+	if req.Ticket.Tkt_vno < 5 {
 		return false, datamodel.NewErrorC(a.defaultRealm, a.principal, datamodel.KRB_AP_ERR_BADKEYVER), noRep()
 	}
 	// ticket is encrypted in the session key from the server's TGT rather server's secret key
-	useSessionKey := req.ApOptions[datamodel.AP_FLAG_USE_SESSION_KEY]
+	reqApOptions := datamodel.APOptions(req.Ap_options)
+	useSessionKey := reqApOptions.Get(datamodel.AP_FLAG_USE_SESSION_KEY)
 	ticketFound, ticketKey := a.pickKey(req.Ticket.Realm, useSessionKey)
 	if !ticketFound {
 		return false, datamodel.NewErrorC(a.defaultRealm, a.principal, datamodel.KRB_AP_ERR_NOKEY), noRep()
 	}
 	ticket := datamodel.EncTicketPart{}
-	err := a.decrypt(req.Ticket.EncPart, ticketKey, &ticket)
+	err := a.decrypt(req.Ticket.Enc_part, ticketKey, &ticket)
 	if err != nil {
 		return false, datamodel.NewErrorC(a.defaultRealm, a.principal, datamodel.KRB_AP_ERR_BAD_INTEGRITY), noRep()
 	}
@@ -47,7 +48,7 @@ func (a *applicationServer) ApplicationServerExchange(req datamodel.ApReq) (ok b
 	if err != nil {
 		return false, datamodel.NewErrorC(a.defaultRealm, a.principal, datamodel.KRB_AP_ERR_BAD_INTEGRITY), noRep()
 	}
-	if !auth.CName.Equal(ticket.CName) || auth.CRealm != ticket.CRealm {
+	if !auth.Cname.Equal(ticket.Cname) || auth.Crealm != ticket.Crealm {
 		return false, datamodel.NewErrorC(a.defaultRealm, a.principal, datamodel.KRB_AP_ERR_BADMATCH), noRep()
 	}
 
@@ -56,7 +57,7 @@ func (a *applicationServer) ApplicationServerExchange(req datamodel.ApReq) (ok b
 	// but none are present in the ticket, the KRB_AP_ERR_BADADDR error is returned
 
 	stime, _ := datamodel.KerberosTimeNowUsec()
-	if auth.CTime.AbsoluteDifference(stime) > a.clockSkew {
+	if datamodel.KerberosTime(auth.Ctime).AbsoluteDifference(stime) > a.clockSkew {
 		return false, datamodel.NewErrorC(a.defaultRealm, a.principal, datamodel.KRB_AP_ERR_SKEW), noRep()
 	}
 
@@ -64,36 +65,39 @@ func (a *applicationServer) ApplicationServerExchange(req datamodel.ApReq) (ok b
 		return false, datamodel.NewErrorC(a.defaultRealm, a.principal, datamodel.KRB_AP_ERR_REPEAT), noRep()
 	}
 
-	a.recvSeqNo = auth.SeqNumber
-	a.subKey = auth.SubKey
+	a.recvSeqNo = &auth.Seq_number
+	a.subKey = &auth.Subkey
 
-	if ticket.StartTime != nil && ticket.StartTime.Difference(stime) > a.clockSkew ||
-		ticket.Flags[datamodel.TKT_FLAG_INVALID] {
+	ticketStartTime := datamodel.KerberosTime(ticket.Starttime)
+	ticketEndTime := datamodel.KerberosTime(ticket.Endtime)
+	ticketFlags := datamodel.TicketFlags(ticket.Flags)
+	if !ticketStartTime.IsEmpty() && ticketStartTime.Difference(stime) > a.clockSkew ||
+		ticketFlags.Get(datamodel.TKT_FLAG_INVALID) {
 		return false, datamodel.NewErrorC(a.defaultRealm, a.principal, datamodel.KRB_AP_ERR_TKT_NYV), noRep()
 	}
-	if ticket.EndTime.Difference(stime) > a.clockSkew {
+	if ticketEndTime.Difference(stime) > a.clockSkew {
 		return false, datamodel.NewErrorC(a.defaultRealm, a.principal, datamodel.KRB_AP_ERR_TKT_EXPIRED), noRep()
 	}
 	// end of ticket validations, server is assured that client is authenticated
 
-	if !req.ApOptions[datamodel.AP_FLAG_MUTUAL_REQUIRED] {
+	if !reqApOptions.Get(datamodel.AP_FLAG_MUTUAL_REQUIRED) {
 		if a.seqNoEnabled {
 			seqNo := crypto.GenerateSeqNumber()
-			a.sendSeqNo = &seqNo
+			a.sendSeqNo = datamodel.UInt32(seqNo)
 		}
 		//  implementations ... MAY provide routines to choose subkeys based on session keys
-		var subKey *datamodel.EncryptionKey = nil
+		var subKey datamodel.EncryptionKey
 		rep := datamodel.EncAPRepPart{
-			CTime:     auth.CTime,
-			CUSec:     auth.CUSec,
-			SubKey:    subKey,
-			SeqNumber: a.sendSeqNo,
+			Ctime:     auth.Ctime,
+			Cusec:     auth.Cusec,
+			Subkey:    subKey,
+			Seq_number: a.sendSeqNo,
 		}
 		err, encRepData := a.encrypt(ticket.Key, rep)
 		if err != nil {
 			return
 		}
-		return true, datamodel.NoError(), datamodel.ApRep{EncPart: encRepData}
+		return true, datamodel.NoError(), datamodel.AP_REP{Enc_part: encRepData}
 	}
 	return true, datamodel.NoError(), noRep()
 }
@@ -116,17 +120,17 @@ func (a *applicationServer) pickKey(realm datamodel.Realm, useSessionKey bool) (
 	}
 }
 
-func noRep() datamodel.ApRep {
-	return datamodel.ApRep{}
+func noRep() datamodel.AP_REP {
+	return datamodel.AP_REP{}
 }
 
 func (a *applicationServer) decrypt(input datamodel.EncryptedData, key datamodel.EncryptionKey, dest interface{}) error {
-	algo := a.crypto.Create(key.KeyType)
+	algo := a.crypto.Create(key.Keytype)
 	return algo.Decrypt(input, key, dest)
 }
 
 func (a *applicationServer) encrypt(key datamodel.EncryptionKey, input interface{}) (error, datamodel.EncryptedData) {
-	algo := a.crypto.Create(key.KeyType)
+	algo := a.crypto.Create(key.Keytype)
 	return algo.Encrypt(key, input)
 }
 

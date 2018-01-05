@@ -5,9 +5,9 @@ import (
 )
 
 type ClientTransport interface {
-	SendAsReq(datamodel.AsReq) (error, datamodel.AsRep)
-	SendApReq(datamodel.ApReq) (error, datamodel.ApRep)
-	SendTgsReq(datamodel.TgsReq) (error, datamodel.TgsRep)
+	SendAsReq(datamodel.AS_REQ) (error, datamodel.AS_REP)
+	SendApReq(datamodel.AP_REQ) (error, datamodel.AP_REP)
+	SendTgsReq(datamodel.TGS_REQ) (error, datamodel.TGS_REP)
 }
 
 type Client interface {

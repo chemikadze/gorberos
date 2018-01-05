@@ -10,17 +10,17 @@ type Factory interface {
 }
 
 type EncryptionFactory interface {
-	Create(etype int32) Algorithm
-	SupportedETypes() []int32
+	Create(etype datamodel.Int32) Algorithm
+	SupportedETypes() []datamodel.Int32
 }
 
 type ChecksumFactory interface {
-	CreateChecksum(cktype int32) ChecksumAlgorithm
-	ChecksumTypeForEncryption(etype int32) (cktype int32)
+	CreateChecksum(cktype datamodel.Int32) ChecksumAlgorithm
+	ChecksumTypeForEncryption(etype datamodel.Int32) (cktype datamodel.Int32)
 }
 
 type Algorithm interface {
-	EType() int32
+	EType() datamodel.Int32
 	Decrypt(input datamodel.EncryptedData, key datamodel.EncryptionKey, result interface{}) error
 	Encrypt(key datamodel.EncryptionKey, input interface{}) (error, datamodel.EncryptedData)
 	GenerateKey() datamodel.EncryptionKey

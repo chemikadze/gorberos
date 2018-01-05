@@ -186,11 +186,11 @@ padata-type  Name             Contents of padata-value
       19           pa-etype-info2   DER encoding of ETYPE-INFO2
 */
 const (
-	PA_TGS_REQ       int32 = 1
-	PA_ENC_TIMESTAMP int32 = 2
-	PA_PW_SALT       int32 = 3
-	PA_ETYPE_INFO    int32 = 11
-	PA_ETYPE_INFO2   int32 = 19
+	PA_T_TGS_REQ Int32 = 1
+	PA_T_ENC_TIMESTAMP Int32 = 2
+	PA_T_PW_SALT       Int32 = 3
+	PA_T_ETYPE_INFO    Int32 = 11
+	PA_T_ETYPE_INFO2   Int32 = 19
 )
 
 /**
@@ -202,10 +202,10 @@ const (
   DER encoding of AD-MANDATORY-FOR-KDC  8
 */
 const (
-	AD_IF_RELEVANT       int32 = 1
-	AD_KDC_ISSUED        int32 = 4
-	AD_AND_OR            int32 = 5
-	AD_MANDAROTY_FOR_KDC int32 = 8
+	AD_T_IF_RELEVANT int32 = 1
+	AD_T_KDC_ISSUED int32 = 4
+	AD_T_AND_OR int32 = 5
+	AD_T_MANDAROTY_FOR_KDC int32 = 8
 )
 
 /**
