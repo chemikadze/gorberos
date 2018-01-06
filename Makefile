@@ -5,6 +5,9 @@ default: datamodel/rfc4120_generated.go
 datamodel/rfc4120_generated.go: datamodel/rfc4120.asn1
 	go generate -v ./...
 
+generate: datamodel/rfc4120_generated.go
+.PHONY: generate
+
 deps:
 	go get github.com/chemikadze/asn1go/cmd/asn1go
 .PHONY: deps
